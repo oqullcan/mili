@@ -88,6 +88,27 @@ crate = "chacha20poly1305@0.11.0"
 exact = true
 allow = ["alloc"]
 
+# `alloc` is required for the allocating parts of the key API and for the
+# pkcs8 module being compiled out. mili turns the default feature set off
+# explicitly, which also drops `getrandom` and `pkcs8`; mili does not do PKCS#8.
+[[bans.features]]
+crate = "ml-dsa@0.1.1"
+exact = true
+allow = ["alloc", "zeroize"]
+
+# mili turns the default feature set off and asks for `alloc` and `zeroize`.
+# `fast` selects the SIMD backends of curve25519-dalek; the portable path is not
+# something mili selects.
+[[bans.features]]
+crate = "ed25519-dalek@3.0.0"
+exact = true
+allow = ["alloc", "zeroize"]
+
+# hybrid-array has no exact entry. Its feature set is decided by whoever depends
+# on it, ml-kem and ml-dsa among others, and each one turns on a different
+# combination. Pinning it would mean pinning the union of every upstream choice,
+# which is not a decision mili makes.
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

@@ -182,7 +182,21 @@ signature valid only if both verify is at least as strong as either. Both
 algorithms are assumed secure; neither has been shown otherwise. Partially
 mitigated by construction.
 
-### 3.6 Replay of a whole file
+### 3.6 Signature determinism
+
+ML-DSA signing in mili is deterministic, so two signatures by the same key over
+the same message are byte identical. An observer who holds a verifying key can
+link them. This is not prevented and not claimed to be prevented. The Ed25519
+half is also deterministic, as Ed25519 is by construction, so the composite
+signature is deterministic throughout.
+
+Making the ML-DSA half randomised requires the `hazmat` feature of `ml-dsa`,
+which the pinned version does not expose through its ordinary API. FIPS 204
+approves the deterministic algorithm and the composite draft does not require
+randomised signing, so the construction is conformant. Partially mitigated: the
+linkability is documented rather than removed.
+
+### 3.7 Replay of a whole file
 
 A file decrypted successfully can be presented again and will decrypt again.
 mili has no anti-replay state and no freshness field. A timestamp or counter

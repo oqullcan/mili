@@ -25,8 +25,6 @@
 //! | [`Domain::KeyWrap`] | `mili-v1:keywrap` | key file wrapping key |
 //! | [`Domain::Signature`] | `mili-v1:signature` | reserved, signature scheme binding |
 //! | [`Domain::KeyId`] | `mili-v1:keyid` | key identifier |
-//! | [`Domain::SeedEd25519`] | `mili-v1:seed-ed25519` | Ed25519 seed from the signing master seed |
-//! | [`Domain::SeedMlDsa65`] | `mili-v1:seed-mldsa65` | ML-DSA-65 seed from the signing master seed |
 //!
 //! # Residual
 //!
@@ -60,22 +58,16 @@ pub enum Domain {
     Signature,
     /// Key identifier.
     KeyId,
-    /// Ed25519 seed expansion from the signing master seed.
-    SeedEd25519,
-    /// ML-DSA-65 seed expansion from the signing master seed.
-    SeedMlDsa65,
 }
 
 impl Domain {
     /// Every domain, in declaration order.
-    pub const ALL: [Domain; 7] = [
+    pub const ALL: [Domain; 5] = [
         Domain::Seal,
         Domain::Stream,
         Domain::KeyWrap,
         Domain::Signature,
         Domain::KeyId,
-        Domain::SeedEd25519,
-        Domain::SeedMlDsa65,
     ];
 
     /// The HKDF `info` label bound to this purpose.
@@ -87,8 +79,6 @@ impl Domain {
             Domain::KeyWrap => b"mili-v1:keywrap",
             Domain::Signature => b"mili-v1:signature",
             Domain::KeyId => b"mili-v1:keyid",
-            Domain::SeedEd25519 => b"mili-v1:seed-ed25519",
-            Domain::SeedMlDsa65 => b"mili-v1:seed-mldsa65",
         }
     }
 }
@@ -188,8 +178,6 @@ mod tests {
             "keywrap" => Domain::KeyWrap,
             "signature" => Domain::Signature,
             "keyid" => Domain::KeyId,
-            "seed-ed25519" => Domain::SeedEd25519,
-            "seed-mldsa65" => Domain::SeedMlDsa65,
             other => panic!("vector file names an unknown domain: {other}"),
         }
     }
@@ -319,8 +307,6 @@ mod tests {
         assert_eq!(Domain::KeyWrap.label(), b"mili-v1:keywrap");
         assert_eq!(Domain::Signature.label(), b"mili-v1:signature");
         assert_eq!(Domain::KeyId.label(), b"mili-v1:keyid");
-        assert_eq!(Domain::SeedEd25519.label(), b"mili-v1:seed-ed25519");
-        assert_eq!(Domain::SeedMlDsa65.label(), b"mili-v1:seed-mldsa65");
     }
 
     #[test]

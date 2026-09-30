@@ -222,26 +222,73 @@ ofs  len  field
 
 ```
 prehash = SHA-512(message)
-m_prime = "CompositeAlgorithmSignatures2025"        26 bytes
-        || "COMPSIG-MLDSA65-Ed25519-SHA512"          29 bytes
+m_prime = "CompositeAlgorithmSignatures2025"        32 bytes
+        || "COMPSIG-MLDSA65-Ed25519-SHA512"          30 bytes
         || 0x00                                      len(ctx), ctx is empty
         || prehash
 ```
 
+`m_prime` is 127 bytes. The draft gives the prefix as the hex string
+`436F6D706F73697465416C676F726974686D5369676E61747572657332303235`, which is 32
+bytes; the label is 30 bytes. Both are asserted in the unit tests, so a
+transcription error cannot survive.
+
 ### 6.3 Sign and verify
 
 ```
-mldsa_sig  = ML-DSA-65.Sign(m_prime, ctx = "COMPSIG-MLDSA65-Ed25519-SHA512")
+mldsa_sig  = ML-DSA-65.Sign(m_prime, mldsa_ctx = "COMPSIG-MLDSA65-Ed25519-SHA512")
 ed_sig     = Ed25519.Sign(m_prime)
 signature  = mldsa_sig || ed_sig
 ```
 
+Verification, as section 3.2 step 4 of the draft states it:
+
+```
+valid = ML-DSA-65.Verify(mldsa_pk, m_prime, mldsa_sig, mldsa_ctx = Label)
+     && Ed25519.Verify(ed25519_pk, m_prime, ed_sig)
+```
+
 A signature is valid only if both halves verify. There is no partial or
-alternative acceptance path. If either half fails, the result is
-`Error::Failed` with no indication of which half failed.
+alternative acceptance path. If either half fails, the result is `Error::Failed`
+with no indication of which half failed.
+
+The draft permits failing early on the first component, on the grounds that no
+private key is involved in verification and so there is nothing to learn from
+timing. mili returns as soon as a half fails, which is the same choice.
+
+The composite label is passed into ML-DSA as its context string. That is the
+draft's own requirement, and it is what binds the ML-DSA half to this composite
+algorithm rather than to a bare ML-DSA signature.
 
 Signatures cover a single in-memory buffer. There is no streaming signature in
 mili-v1.
+
+### 6.4 ML-DSA signing is deterministic
+
+`ml-dsa` 0.1.1 exposes only the deterministic variant of ML-DSA signing outside
+its `hazmat` feature: the randomness parameter is fixed at zero, so signing the
+same message with the same key always produces byte-identical output.
+
+Consequences, both of which are real:
+
+- Two signatures by the same key over the same message are identical. An
+  observer holding a verifying key can therefore link them. This is the same
+  linkability an observer gets from deterministic encryption, and mili does not
+  claim to prevent it.
+- There is no hedged randomisation, so the extra fault-attack resistance that
+  randomised ML-DSA signing provides is not available.
+
+FIPS 204 approves the deterministic algorithm, and the composite draft does not
+require randomised signing, so the construction is conformant. It is recorded in
+`THREAT_MODEL.md` as a partial mitigation rather than a solved problem. Making
+mili's signatures randomised would need the `hazmat` feature of `ml-dsa` and a
+signing path that is not exposed without it.
+
+One consequence for testing: the draft's Appendix E vectors pin *verification*,
+not signature bytes. The reference implementation that produced them used
+randomised ML-DSA signing, so mili's signature over the draft's key and message
+verifies under the draft's public key but is not byte identical to the published
+one. The test asserts both facts.
 
 ## 7. Password-wrapped key file (`format_type = 0x10`)
 
@@ -404,21 +451,24 @@ password-protected.
 
 ## 12. Key hierarchy
 
-Every stored secret is a single 32 byte seed. Everything else is derived.
-
 ```
 sealing_key              32 bytes   X-Wing seed
-signing_key              32 bytes   master seed, expanded below
+signing_key              64 bytes   ML-DSA-65 seed (32) || Ed25519 seed (32)
 symmetric_key            32 bytes   direct
-
-signing_key expands to:
-  ed25519_seed    = HKDF-SHA256(signing_key, empty, "mili-v1:seed-ed25519")   32
-  mldsa65_seed    = HKDF-SHA256(signing_key, empty, "mili-v1:seed-mldsa65")   32
 ```
 
-`mili-v1:seed-ed25519` and `mili-v1:seed-mldsa65` are two further members of the
-closed `Domain` set. Storing one seed rather than two means one secret to back
-up and one secret to rotate.
+The signing key is the composite private key exactly as
+`draft-ietf-lamps-pq-composite-sigs` defines it: the two component seeds
+concatenated, ML-DSA-65 first. It is not derived from a shorter master seed.
+
+An earlier draft of this document specified a 32 byte signing master seed
+expanded with HKDF into the two component seeds. That is withdrawn. The
+composite draft defines its own private key encoding, and adopting the draft for
+the signature construction while using a different private key encoding would
+break the only interoperability the adoption buys: a key that no other
+implementation of the same construction can reconstruct. It would also mean
+inventing a key schedule, which the mili rules do not allow. The two
+`mili-v1:seed-*` labels are therefore removed from the closed `Domain` set.
 
 ### 12.1 Rotation
 
@@ -472,9 +522,7 @@ schedule.
 | C2SP Wycheproof `chacha20_poly1305_test.json` | ChaCha20-Poly1305 edge and negative cases | 316, of which 256 accepted and 60 rejected | 2 |
 | `draft-connolly-cfrg-xwing-kem-11` Appendix C | X-Wing keygen, encapsulation and decapsulation | 3 | 2 |
 | NIST ACVP vectors for ML-KEM-768 | ML-KEM agreement, if the X-Wing vectors prove insufficient | - | 2 |
-| RFC 8032 test vectors | Ed25519 agreement | - | 3 |
-| NIST ACVP vectors for ML-DSA-65 | ML-DSA-65 agreement | - | 3 |
-| C2SP Wycheproof `eddsa` and `mldsa` | negative and edge cases | - | 3 |
+| `draft-ietf-lamps-pq-composite-sigs-19` Appendix E | the whole composite signature construction, both components, empty and non empty context | 1 | 3 |
 | RFC 9106 test vectors | Argon2id | - | 5 |
 | proptest properties and exhaustive byte sweeps | mili formats | - | 2 to 5 |
 

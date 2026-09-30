@@ -14,6 +14,9 @@ subtle.workspace = true
 zeroize.workspace = true
 x-wing.workspace = true
 chacha20poly1305.workspace = true
+ml-dsa.workspace = true
+ed25519-dalek.workspace = true
+hybrid-array.workspace = true
 
 [dev-dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }

@@ -76,8 +76,12 @@ mod kem;
 mod rng;
 pub mod seal;
 pub mod secret;
+pub mod signature;
 
 pub use crate::error::Error;
 pub use crate::kem::{EncapsulationKey, SealingKey, ENCAPSULATION_KEY_SIZE, SEALING_KEY_SIZE};
 pub use crate::seal::{open, seal, SEALED_BOX_OVERHEAD};
 pub use crate::secret::{SymmetricKey, SYMMETRIC_KEY_SIZE};
+pub use crate::signature::{
+    SigningKey, VerifyingKey, SIGNATURE_SIZE, SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
+};

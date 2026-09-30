@@ -12,6 +12,7 @@ mili_kdf_v1.json                    mili-v1 HKDF-SHA256 domain separation vector
 rfc8439_chacha20poly1305.json       RFC 8439 Section 2.8.2
 wycheproof_chacha20_poly1305.json   C2SP Wycheproof, converted
 xwing_draft11.json                  draft-connolly-cfrg-xwing-kem-11 Appendix C
+lamps19_composite_ed25519.json      draft-ietf-lamps-pq-composite-sigs-19 Appendix E
 ```
 
 ## What each file is for
@@ -23,6 +24,7 @@ xwing_draft11.json                  draft-connolly-cfrg-xwing-kem-11 Appendix C
 | `rfc8439_chacha20poly1305.json` | ChaCha20-Poly1305 against the RFC | `aead::tests::rfc8439_vector` |
 | `wycheproof_chacha20_poly1305.json` | ChaCha20-Poly1305 against 316 converted Wycheproof cases, 256 accepted and 60 rejected | `aead::tests::wycheproof_chacha20_poly1305` |
 | `xwing_draft11.json` | X-Wing keygen, encapsulation and decapsulation against the draft, all three | `kem::tests::xwing_*` |
+| `lamps19_composite_ed25519.json` | the whole composite signature construction, both components, both transcripts, from the draft's own Appendix E | `signature::tests::lamps_draft_vector` |
 
 ## Adding vectors
 
@@ -33,11 +35,9 @@ A vector file added in a later phase:
 
 - `mlkem768_acvp.json` — from NIST ACVP, if the X-Wing vectors turn out to be
   insufficient to pin the ML-KEM-768 half
-- `ed25519_rfc8032.json` — from RFC 8032
 - `mldsa65_acvp.json` — from NIST ACVP
 - `chacha20poly1305_rfc8439.json` — from RFC 8439
 - `argon2id_rfc9106.json` — from RFC 9106
-- `wycheproof_eddsa.json`, `wycheproof_mldsa.json` — from C2SP Wycheproof, in phase 3
 
 Conversion from an upstream file to this layout happens once and is committed.
 The runner is written against the converted file, not against the upstream
