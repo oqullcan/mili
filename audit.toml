@@ -1,0 +1,13 @@
+# cargo-audit configuration for mili.
+#
+# Policy: no advisory is ignored. If cargo-audit reports a vulnerability in a
+# pinned version, the version changes or this file changes, with the reason
+# recorded in the commit that makes the change.
+#
+# Run: cargo audit
+
+[advisories]
+ignore = []
+
+[database]
+url = "https://github.com/rustsec/advisory-db"

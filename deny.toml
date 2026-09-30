@@ -1,0 +1,95 @@
+# cargo-deny configuration for mili.
+#
+# Policy: only crates.io, only permissive licences, no duplicated crate
+# versions, no wildcards in version requirements, no ignored advisories.
+#
+# Run: cargo deny check
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    # unicode-ident, reached through every proc macro in the tree
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+allow = []
+allow-workspace = false
+deny = []
+skip-tree = []
+
+# Duplicated crate versions, each with the reason it cannot be removed. mili
+# never exchanges data between two versions of the same crate, so a duplicate
+# here is code size and build time, not a protocol concern.
+skip = [
+    { crate = "sha3", reason = "ml-kem 0.3.2 requires sha3 0.11 and x-wing 0.1.0 requires sha3 0.12. Both are SHA-3; mili pins both versions and passes no data between them. Removing this needs an upstream release of one of the two crates." },
+]
+
+# Feature sets are pinned for the crates mili depends on directly, by version.
+# The blanket `external-default-features` lint fires on nearly every crate and
+# carries no signal, and pinning transitive crates is noise, because their
+# enabled feature set is decided by whatever upstream turns on.
+#
+# `exact = true` fails the check when the enabled set is not the list below, so
+# an upstream release that quietly adds a default feature is caught in review.
+[[bans.features]]
+crate = "subtle@2.6.1"
+exact = true
+# `const-generics` is enabled by curve25519-dalek 5, which x25519-dalek pulls in.
+allow = ["const-generics"]
+
+[[bans.features]]
+crate = "sha2@0.11.0"
+exact = true
+allow = []
+
+[[bans.features]]
+crate = "hkdf@0.13.0"
+exact = true
+allow = []
+
+[[bans.features]]
+crate = "getrandom@0.4.3"
+exact = true
+allow = ["sys_rng"]
+
+[[bans.features]]
+crate = "zeroize@1.9.0"
+exact = true
+allow = ["default", "alloc"]
+
+# `getrandom` supplies the system RNG that X-Wing encapsulation uses and
+# `zeroize` clears the X-Wing decapsulation key on drop. Both are required.
+[[bans.features]]
+crate = "x-wing@0.1.0"
+exact = true
+allow = ["default", "getrandom", "zeroize"]
+
+# `alloc` is required for the allocating `Aead` API. mili turns the default
+# feature set off explicitly; it is empty for this crate anyway.
+[[bans.features]]
+crate = "chacha20poly1305@0.11.0"
+exact = true
+allow = ["alloc"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
