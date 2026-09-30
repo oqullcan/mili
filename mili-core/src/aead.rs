@@ -17,7 +17,7 @@
 //!
 //! Crate-private. A caller never selects an algorithm or supplies a nonce.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use zeroize::Zeroizing;
 
@@ -89,17 +89,31 @@ impl AeadKey {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        let ciphertext = self
-            .0
-            .encrypt(
-                &Nonce::from(nonce.0),
-                Payload {
-                    msg: plaintext,
-                    aad,
-                },
-            )
-            .map_err(|_| Error::Internal)?;
-        Ok(ciphertext)
+        let mut out = Vec::with_capacity(plaintext.len() + TAG_SIZE);
+        out.extend_from_slice(plaintext);
+        self.seal_extend(nonce, aad, &mut out)?;
+        Ok(out)
+    }
+
+    /// Encrypts the contents of `buffer` in place, appending the tag.
+    ///
+    /// The streaming format calls this once per 64 KiB chunk. Encrypting in
+    /// place rather than allocating a fresh 64 KiB vector for every chunk is the
+    /// reason this exists; [`Self::seal`] is the form for a single buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Internal`] if the cipher reports an internal limit. The chunk
+    /// size in every mili format is far below those limits.
+    pub(crate) fn seal_extend(
+        &self,
+        nonce: AeadNonce,
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        self.0
+            .encrypt_in_place(&Nonce::from(nonce.0), aad, buffer)
+            .map_err(|_| Error::Internal)
     }
 
     /// Authenticates and decrypts `ciphertext`.
@@ -119,20 +133,33 @@ impl AeadKey {
         aad: &[u8],
         ciphertext: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>, Error> {
-        if ciphertext.len() < TAG_SIZE {
+        let mut buffer = Vec::with_capacity(ciphertext.len());
+        buffer.extend_from_slice(ciphertext);
+        self.open_in_place(nonce, aad, &mut buffer)?;
+        Ok(Zeroizing::new(buffer))
+    }
+
+    /// Decrypts the contents of `buffer` in place, truncating it to the
+    /// plaintext.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Failed`] if `buffer` is shorter than the tag, or if the tag does
+    /// not verify. The streaming format calls this once per chunk, on a buffer
+    /// that is reused across the whole file, so that a file of any size costs one
+    /// 64 KiB allocation rather than one per chunk.
+    pub(crate) fn open_in_place(
+        &self,
+        nonce: AeadNonce,
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        if buffer.len() < TAG_SIZE {
             return Err(Error::Failed);
         }
-        let plaintext = self
-            .0
-            .decrypt(
-                &Nonce::from(nonce.0),
-                Payload {
-                    msg: ciphertext,
-                    aad,
-                },
-            )
-            .map_err(|_| Error::Failed)?;
-        Ok(Zeroizing::new(plaintext))
+        self.0
+            .decrypt_in_place(&Nonce::from(nonce.0), aad, buffer)
+            .map_err(|_| Error::Failed)
     }
 }
 

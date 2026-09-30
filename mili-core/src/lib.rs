@@ -41,10 +41,31 @@
 //! # }
 //! ```
 //!
+//! # Streaming
+//!
+//! [`stream::seal_stream`] and [`stream::open_stream`] implement `mili-stream-v1`,
+//! the STREAM construction with 64 KiB chunks. Truncation, reordering, appending
+//! and single bit flips are all detected. [`stream::open_buffered`] is the form
+//! with no partial plaintext exposure, at the cost of holding the whole message.
+//! `SPEC.md` section 5 has the details.
+//!
+//! ```
+//! use mili_core::stream::{open_buffered, seal_buffered};
+//! use mili_core::SealingKey;
+//!
+//! # fn main() -> Result<(), mili_core::Error> {
+//! let key = SealingKey::generate()?;
+//! let mut file = Vec::new();
+//! seal_buffered(&key, &mut file, b"a message")?;
+//! assert_eq!(*open_buffered(&file[..], &[&key], 1024)?, *b"a message");
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # What is not here yet
 //!
-//! Signatures, streaming encryption, key files and the FFI are added in later
-//! phases, each under its own format version as specified in `SPEC.md`.
+//! Key files and the FFI are added in later phases, each under its own format
+//! version as specified in `SPEC.md`.
 //!
 //! # Errors
 //!
@@ -71,12 +92,14 @@
 
 mod aead;
 pub mod error;
+mod format;
 pub mod kdf;
 mod kem;
 mod rng;
 pub mod seal;
 pub mod secret;
 pub mod signature;
+pub mod stream;
 
 pub use crate::error::Error;
 pub use crate::kem::{EncapsulationKey, SealingKey, ENCAPSULATION_KEY_SIZE, SEALING_KEY_SIZE};

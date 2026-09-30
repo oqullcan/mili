@@ -36,27 +36,22 @@ use zeroize::Zeroizing;
 
 use crate::aead::{AeadKey, AeadNonce};
 use crate::error::Error;
+use crate::format::{self, SALT_END, SALT_SIZE};
 use crate::kdf::{self, Domain};
 use crate::kem::{EncapsulationKey, SealingKey, KEM_CIPHERTEXT_SIZE};
 use crate::secret::SecretBytes;
 
 /// The magic every mili file starts with.
-pub const MAGIC: [u8; 4] = *b"mili";
+pub use crate::format::MAGIC;
 
 /// The `format_type` byte of a sealed box.
 pub const FORMAT_TYPE: u8 = 0x01;
 
 /// The `version` byte of a sealed box.
-pub const VERSION: u8 = 0x01;
-
-/// Offset of the `salt` field.
-pub(crate) const SALT_OFFSET: usize = 6;
-
-/// Length of the `salt` field.
-pub(crate) const SALT_SIZE: usize = 32;
+pub use crate::format::VERSION;
 
 /// Length of the authenticated header: everything before the ciphertext.
-pub(crate) const HEADER_SIZE: usize = SALT_OFFSET + SALT_SIZE + KEM_CIPHERTEXT_SIZE;
+pub(crate) const HEADER_SIZE: usize = SALT_END + KEM_CIPHERTEXT_SIZE;
 
 /// Bytes a sealed box adds to the plaintext: header plus AEAD tag.
 pub const SEALED_BOX_OVERHEAD: usize = HEADER_SIZE + crate::aead::TAG_SIZE;
@@ -90,10 +85,7 @@ pub fn seal(public: &EncapsulationKey, plaintext: &[u8]) -> Result<Vec<u8>, Erro
     let (kem_ct, shared) = public.encapsulate();
 
     let mut header = Vec::with_capacity(HEADER_SIZE);
-    header.extend_from_slice(&MAGIC);
-    header.push(FORMAT_TYPE);
-    header.push(VERSION);
-    header.extend_from_slice(&salt);
+    format::write_prefix(&mut header, FORMAT_TYPE, &salt);
     header.extend_from_slice(&kem_ct);
 
     let aead = aead_for(&shared, &salt)?;
@@ -185,27 +177,12 @@ impl<'a> Header<'a> {
     /// bytes are public, and the authentication happens in the AEAD step, so this
     /// parse only decides whether the buffer is shaped like a sealed box at all.
     fn parse(sealed: &'a [u8]) -> Result<Self, Error> {
-        if sealed.len() < SEALED_BOX_OVERHEAD {
-            return Err(Error::Failed);
-        }
-        if sealed[..4] != MAGIC {
-            return Err(Error::Failed);
-        }
-        if sealed[4] != FORMAT_TYPE {
-            return Err(Error::Failed);
-        }
-        if sealed[5] != VERSION {
-            return Err(Error::UnsupportedVersion);
-        }
-
-        let mut salt = [0u8; SALT_SIZE];
-        salt.copy_from_slice(&sealed[SALT_OFFSET..SALT_OFFSET + SALT_SIZE]);
-
+        let prefix = format::parse_prefix(sealed, FORMAT_TYPE, SEALED_BOX_OVERHEAD)?;
         Ok(Self {
             bytes: &sealed[..HEADER_SIZE],
-            salt,
-            kem_ct: &sealed[SALT_OFFSET + SALT_SIZE..HEADER_SIZE],
-            ciphertext: &sealed[HEADER_SIZE..],
+            salt: prefix.salt,
+            kem_ct: &prefix.body[..KEM_CIPHERTEXT_SIZE],
+            ciphertext: &prefix.body[KEM_CIPHERTEXT_SIZE..],
         })
     }
 }
@@ -214,9 +191,8 @@ impl<'a> Header<'a> {
 mod tests {
     #[cfg(not(miri))]
     use super::open;
-    use super::{
-        aead_for, seal, FORMAT_TYPE, HEADER_SIZE, MAGIC, SALT_OFFSET, SEALED_BOX_OVERHEAD, VERSION,
-    };
+    use super::{aead_for, seal, FORMAT_TYPE, HEADER_SIZE, MAGIC, SEALED_BOX_OVERHEAD, VERSION};
+    use crate::format::SALT_END;
     use crate::kem::{KEM_CIPHERTEXT_SIZE, SEALING_KEY_SIZE};
     use crate::SealingKey;
     #[cfg(not(miri))]
@@ -231,8 +207,8 @@ mod tests {
         assert_eq!(MAGIC, [0x6D, 0x69, 0x6C, 0x69]);
         assert_eq!(FORMAT_TYPE, 0x01);
         assert_eq!(VERSION, 0x01);
-        assert_eq!(SALT_OFFSET, 6);
         assert_eq!(KEM_CIPHERTEXT_SIZE, 1120);
+        assert_eq!(HEADER_SIZE, 1158);
         assert_eq!(HEADER_SIZE, 1158);
         assert_eq!(SEALED_BOX_OVERHEAD, 1174);
     }
@@ -307,9 +283,7 @@ mod tests {
         let plaintext = b"";
         let sealed = seal(&key.encapsulation_key(), plaintext).expect("seal");
 
-        let salt: [u8; 32] = sealed[SALT_OFFSET..SALT_OFFSET + 32]
-            .try_into()
-            .expect("32 bytes");
+        let salt: [u8; 32] = sealed[6..6 + 32].try_into().expect("32 bytes");
         let shared = key
             .decapsulate(&sealed[38..HEADER_SIZE])
             .expect("valid length");
@@ -320,12 +294,23 @@ mod tests {
         aead.open(crate::aead::AeadNonce::ZERO, baseline_header, baseline_body)
             .expect("the untampered file authenticates");
 
-        // Under miri the sweep is bounded: miri interprets every ChaCha20 round,
-        // so a 1174 byte sweep takes hours instead of milliseconds. The bound
-        // still covers the header prefix and the whole ciphertext region, which
-        // is where the two coverage rules live.
+        // Under miri the sweep is reduced to one position per region. miri
+        // interprets the ChaCha20 and Poly1305 rounds, and the associated data
+        // is 1158 bytes, so one authenticated operation costs about ten seconds
+        // here and the native 1174 position sweep would take hours. Four
+        // positions, one per region, is what is needed to catch a slice bound
+        // that is off by one. The exhaustive native sweep and the proptest
+        // stride cover the rest.
         let sweep: Box<dyn Iterator<Item = usize>> = if cfg!(miri) {
-            Box::new((0..128usize).chain(HEADER_SIZE..sealed.len()))
+            Box::new(
+                [
+                    0,                // first byte of the magic
+                    SALT_END - 1,     // last byte of the salt
+                    SALT_END,         // first byte of the KEM ciphertext
+                    sealed.len() - 1, // last byte of the tag
+                ]
+                .into_iter(),
+            )
         } else {
             Box::new(0..sealed.len())
         };
@@ -488,7 +473,7 @@ mod tests {
     fn the_aead_key_is_derived_from_the_salt_and_the_shared_secret() {
         let key = key();
         let sealed = seal(&key.encapsulation_key(), b"x").expect("seal");
-        let salt = &sealed[SALT_OFFSET..SALT_OFFSET + 32];
+        let salt = &sealed[6..38];
 
         let shared = key
             .decapsulate(&sealed[38..HEADER_SIZE])
@@ -540,7 +525,7 @@ mod tests {
         // opening rather than opening into something else.
         let key = key();
         let mut sealed = seal(&key.encapsulation_key(), b"a message").expect("seal");
-        sealed[SALT_OFFSET] ^= 0x01;
+        sealed[6] ^= 0x01;
         assert!(matches!(key.open(&sealed), Err(Error::Failed)));
     }
 }

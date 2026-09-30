@@ -42,7 +42,7 @@ above.
 
 ```
 mili-core/           the library
-  src/               error, secret, rng, kdf, kem, aead, seal, signature
+  src/               error, secret, rng, kdf, kem, aead, seal, signature, stream, format
   tests/             property tests against the public API
 tests/vectors/       known answer test vectors, read at compile time
 docs/                created when a document does not belong in the root
@@ -62,7 +62,7 @@ rust-toolchain.toml  pinned toolchain
 | 1 skeleton, error type, secret types, RNG, key derivation, CI, dependency policy | done |
 | 2 X-Wing sealed box, `mili-seal-v1` | done |
 | 3 composite signatures | done |
-| 4 streaming file encryption | not started |
+| 4 streaming file encryption | done |
 | 5 password-wrapped key files | not started |
 | 6 fuzz targets, miri, hardening | not started |
 | 7 `mili-ffi` and the Go binding | not started |
@@ -82,9 +82,13 @@ cargo audit
 
 ## Cost of the checks
 
-`cargo test` takes about 90 seconds, dominated by the property tests, which run
-an ML-KEM-768 decapsulation or an ML-DSA-65 signature per case.
-`cargo +nightly miri test -p mili-core` takes about seven minutes and is a CI job
-rather than something to run in a loop. Tests that call ML-KEM-768, X25519,
-ML-DSA-65 or Ed25519 are excluded under miri, and one exhaustive Wycheproof
-sweep is ignored there; see `SPEC.md` section 15.1.
+`cargo test` takes about two and a half minutes, dominated by the property
+tests, which run an ML-KEM-768 decapsulation or an ML-DSA-65 signature per case,
+and by the stream tamper sweeps, which do one decapsulation per tested byte.
+`cargo +nightly miri test -p mili-core --lib` takes about two and a half minutes
+with `MIRIFLAGS=-Zmiri-disable-isolation`, which is what CI uses, and about five
+minutes without it. It is a CI job rather than something to run in a loop. Tests
+that call ML-KEM-768, X25519, ML-DSA-65 or Ed25519 are excluded under miri, one
+exhaustive Wycheproof sweep is ignored there, and the sealed box byte sweep is
+reduced to one position per region because each authenticated operation costs
+about ten seconds when interpreted. See `SPEC.md` section 15.1.

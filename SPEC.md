@@ -164,7 +164,23 @@ The counter is never transmitted and never wraps: reaching `2^88` chunks is an
 `Error::Internal`, not a wrap-around. Byte 11 of the nonce is the flag and is
 never incremented.
 
-### 5.3 What the reader enforces
+### 5.3 Which flag a chunk carries
+
+A non-final chunk is always exactly 65552 bytes. A final chunk is
+`plaintext_len + 16` bytes, so a final chunk of a message whose length is an
+exact multiple of 65536 is also exactly 65552 bytes and is indistinguishable
+from a non-final chunk by length alone. The reader resolves this the way age
+does:
+
+- a short chunk is the final chunk, and is tried only with the flag set
+- a full length chunk is tried as non-final, and on failure is retried as final
+
+The same decision is made twice: once while selecting a key, since the header
+alone does not authenticate and the first chunk is what selects a key, and once
+per chunk while reading. The two must agree, and they do because both call the
+same rule.
+
+### 5.4 What the reader enforces
 
 - The chunk counter must advance by exactly one per chunk. A chunk presented out
   of order fails to authenticate because its nonce is derived from the index the
@@ -177,7 +193,7 @@ never incremented.
   after the final chunk yield `Error::Failed`.
 - A zero-length plaintext produces exactly one chunk of 16 bytes.
 
-### 5.4 Plaintext exposure before full authentication
+### 5.5 Plaintext exposure before full authentication
 
 A streaming reader releases the plaintext of chunk *i* once chunk *i* is
 authenticated, before chunk *i+1* is read. If a later chunk fails, the plaintext
@@ -186,14 +202,20 @@ of earlier chunks has already been delivered to the caller.
 This is inherent to the streaming construction and is the same behaviour as age
 and rage. mili exposes two readers:
 
-- `StreamReader`, which implements `Read` and releases plaintext incrementally.
-  The caller contract is: on any error, discard everything received so far.
-- `open_buffered`, which reads the whole stream into a `Vec` with an explicit
-  upper bound and returns plaintext only after the final chunk authenticates.
+- `stream::StreamReader`, which implements `Read` and releases plaintext
+  incrementally. The caller contract is: on any error, discard everything
+  received so far.
+- `stream::open_buffered`, which reads the whole stream into a buffer with an
+  upper bound the caller supplies, and returns plaintext only after the final
+  chunk authenticates. It has no partial plaintext exposure at all.
 
 `open_buffered` is the correct default for correctness-critical callers who can
 bound the size. `StreamReader` is for files too large to hold in memory, where
 the caller must own the discard contract.
+
+`open_buffered`'s bound is mandatory and has no default. Any default would be a
+policy decision about message size that the caller has not made, and a library
+that guesses it is a library that can be made to allocate without limit.
 
 ## 6. Composite signature (`format_type = 0x03`)
 

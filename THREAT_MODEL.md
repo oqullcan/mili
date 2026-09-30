@@ -67,7 +67,16 @@ by `SPEC.md` section 5.3.
 A stream must end with a chunk carrying the final flag. A stream that stops
 without one is `Error::Failed`. Removing the final chunk of a stream leaves the
 reader without a final chunk. Removing trailing bytes leaves a short chunk, which
-is rejected. Mitigated by `SPEC.md` section 5.3.
+is rejected. Appending after the final chunk leaves trailing data, which is
+rejected. Removing a middle chunk makes the following chunks arrive at the wrong
+counter, and duplicating the final chunk makes it trailing data. All mitigated by
+`SPEC.md` sections 5.3 and 5.4, and covered by tests that perform each of those
+operations.
+
+A final chunk whose plaintext is a multiple of the chunk size is the same length
+as a non-final one, so length alone does not identify it. The reader tries the
+non-final interpretation first and the final one on failure, which is the same
+rule age uses. Mitigated, with the ambiguity recorded in `SPEC.md` section 5.3.
 
 ### 2.6 Appending to a stream
 
@@ -137,13 +146,19 @@ password.
 
 ### 3.2 Plaintext exposure during streaming decryption
 
-`StreamReader` releases chunk *i*'s plaintext before chunk *i+1* is
+`stream::StreamReader` releases chunk *i*'s plaintext before chunk *i+1* is
 authenticated. If a later chunk fails, earlier plaintext has already been handed
-to the caller. `open_buffered` exists for callers who can bound the message
-size, and returns plaintext only after the final chunk authenticates. For
-messages too large to buffer, the exposure exists and the caller must discard on
-error. Same as age and rage. Partially mitigated by providing a bounded
-buffered path, mitigated by caller discipline otherwise.
+to the caller. `stream::open_buffered` exists for callers who can bound the
+message size, and returns plaintext only after the final chunk authenticates, so
+it has no partial exposure at all. For messages too large to buffer, the exposure
+exists and the caller must discard on error. Same as age and rage. Partially
+mitigated by providing a bounded buffered path with no default bound, so the
+caller makes the size decision; mitigated by caller discipline otherwise.
+
+A note on the bound: `open_buffered` requires the caller to pass a maximum, and
+mili has no default for it. A default would be a library-side policy decision
+about acceptable message sizes, and a caller that gets it wrong by omission would
+have no way to notice.
 
 ### 3.3 Cryptographic implementation correctness
 
