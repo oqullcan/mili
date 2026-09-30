@@ -1,0 +1,45 @@
+{
+  "source": "mili-v1 HKDF-SHA256 domain separation vectors",
+  "note": "Generated with an independent HKDF-SHA256 implementation written against RFC 5869, not with mili. Frozen here as a regression guard on the label bindings. Regenerate by changing mili/src/kdf.rs labels only if SPEC.md changes.",
+  "hash": "SHA-256",
+  "ikm": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "salt": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "length": 32,
+  "cases": [
+    {
+      "domain": "seal",
+      "label": "mili-v1:seal",
+      "okm": "6cb5223eeed70ed5ab6a8f67790fe3147e4ff714f5886d494744d12eaa5c0024"
+    },
+    {
+      "domain": "stream",
+      "label": "mili-v1:stream",
+      "okm": "fb8fa202998dc2662bf962c06f22fd0ea78b6883c56040f364dc83bf8b9f10a5"
+    },
+    {
+      "domain": "keywrap",
+      "label": "mili-v1:keywrap",
+      "okm": "d80a2d70b0412d0604d851b58390a2554733103c7164160d0b694cffe94767cb"
+    },
+    {
+      "domain": "signature",
+      "label": "mili-v1:signature",
+      "okm": "488627bdb7c229ca06b15417e79f531996f7e24a9cf4c8085043c356b7f7d180"
+    },
+    {
+      "domain": "keyid",
+      "label": "mili-v1:keyid",
+      "okm": "528b0f0e7b8fd074d57150b39aa8a0279b1f8eb65814a7cda525c016f2e5a1fa"
+    },
+    {
+      "domain": "seed-ed25519",
+      "label": "mili-v1:seed-ed25519",
+      "okm": "16d76a8eaac3415c1d77ff8da42ba435ba43cc0df56b091a3004e1cc60c62638"
+    },
+    {
+      "domain": "seed-mldsa65",
+      "label": "mili-v1:seed-mldsa65",
+      "okm": "2b0a509f4a06497b3e41c2a1ac647ed480f3f82ef8c1e1ceb1c4c9d7474e49b5"
+    }
+  ]
+}

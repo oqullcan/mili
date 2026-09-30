@@ -1,0 +1,32 @@
+[package]
+name = "mili-core"
+description = "Parameter selection and a misuse-resistant wrapper around audited Rust cryptography crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+x-wing.workspace = true
+chacha20poly1305.workspace = true
+
+[dev-dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+ml-kem = "=0.3.2"
+proptest = "=1.11.0"
+
+[lints.rust]
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unsafe_code = "forbid"
+unreachable_pub = "deny"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
