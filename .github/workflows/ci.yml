@@ -1,0 +1,107 @@
+# mili continuous integration.
+#
+# Every third-party action is pinned to a full commit SHA. The tag is recorded in
+# a trailing comment so the pin can be checked against the tag it came from.
+#
+# No job in this workflow has access to a signing key. The workflow has read-only
+# repository permissions and no `secrets` are referenced anywhere in it. Release
+# signing is not performed by CI; see SPEC.md section 17.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A stale lockfile must fail the build rather than silently resolving to a
+  # different dependency set than the committed one.
+  RUSTFLAGS: --deny warnings
+
+jobs:
+  check:
+    name: fmt, clippy, test, deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      - name: Fail if the toolchain drifted from the pin
+        run: |
+          expected=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          actual=$(rustc --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ "$expected" != "$actual" ]; then
+            echo "rust-toolchain.toml pins $expected but CI built $actual" >&2
+            exit 1
+          fi
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Check the lockfile is complete and current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- --deny warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace
+
+      - name: Build the documentation
+        run: cargo doc --locked --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: --deny warnings
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: cargo-deny
+
+      - name: Dependency policy
+        run: cargo deny check
+
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install nightly with miri
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Prepare the miri sysroot
+        run: cargo miri setup
+
+      - name: Tests under miri
+        run: cargo miri test --locked -p mili-core
+
+  audit:
+    name: advisory audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Audit dependencies against the RustSec advisory database
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
