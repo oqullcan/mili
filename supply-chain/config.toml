@@ -10,84 +10,20 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
-[[exemptions.aead]]
-version = "0.6.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.argon2]]
-version = "0.6.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.autocfg]]
 version = "1.5.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.base64ct]]
-version = "1.8.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
 version = "2.13.2"
 criteria = "safe-to-run"
 
-[[exemptions.blake2]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.block-buffer]]
-version = "0.12.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.cfg-if]]
-version = "1.0.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.chacha20]]
-version = "0.10.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.chacha20poly1305]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.cipher]]
-version = "0.5.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.const-oid]]
 version = "0.10.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.cpufeatures]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.crypto-common]]
-version = "0.2.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.curve25519-dalek]]
-version = "5.0.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.curve25519-dalek-derive]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.der]]
 version = "0.8.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.digest]]
-version = "0.11.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.ed25519]]
-version = "3.0.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.ed25519-dalek]]
-version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.errno]]
@@ -106,29 +42,9 @@ criteria = "safe-to-deploy"
 version = "0.3.4"
 criteria = "safe-to-run"
 
-[[exemptions.hmac]]
-version = "0.13.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.hybrid-array]]
-version = "0.4.15"
-criteria = "safe-to-deploy"
-
-[[exemptions.inout]]
-version = "0.2.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.itoa]]
 version = "1.0.18"
 criteria = "safe-to-run"
-
-[[exemptions.keccak]]
-version = "0.2.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.libc]]
-version = "0.2.189"
-criteria = "safe-to-deploy"
 
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
@@ -137,18 +53,6 @@ criteria = "safe-to-run"
 [[exemptions.memchr]]
 version = "2.8.3"
 criteria = "safe-to-run"
-
-[[exemptions.ml-dsa]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.ml-kem]]
-version = "0.3.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.module-lattice]]
-version = "0.2.3"
-criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
 version = "1.21.4"
@@ -164,14 +68,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.pkcs8]]
 version = "0.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.poly1305]]
-version = "0.9.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.proc-macro2]]
-version = "1.0.107"
 criteria = "safe-to-deploy"
 
 [[exemptions.proptest]]
@@ -198,10 +94,6 @@ criteria = "safe-to-run"
 version = "0.9.5"
 criteria = "safe-to-run"
 
-[[exemptions.rand_core]]
-version = "0.10.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.rand_xorshift]]
 version = "0.4.0"
 criteria = "safe-to-run"
@@ -209,10 +101,6 @@ criteria = "safe-to-run"
 [[exemptions.regex-syntax]]
 version = "0.8.11"
 criteria = "safe-to-run"
-
-[[exemptions.rustc_version]]
-version = "0.4.1"
-criteria = "safe-to-deploy"
 
 [[exemptions.rustix]]
 version = "1.1.5"
@@ -242,45 +130,17 @@ criteria = "safe-to-deploy"
 version = "1.0.151"
 criteria = "safe-to-run"
 
-[[exemptions.sha2]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.sha3]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.sha3]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.signature]]
-version = "3.0.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.spki]]
 version = "0.8.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.syn]]
-version = "2.0.119"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn]]
 version = "3.0.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.typenum]]
-version = "1.20.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.unarray]]
 version = "0.1.4"
 criteria = "safe-to-run"
-
-[[exemptions.unicode-ident]]
-version = "1.0.26"
-criteria = "safe-to-deploy"
 
 [[exemptions.wasip2]]
 version = "1.0.1+wasi-0.2.4"
@@ -297,10 +157,6 @@ criteria = "safe-to-run"
 [[exemptions.wit-bindgen]]
 version = "0.46.0"
 criteria = "safe-to-run"
-
-[[exemptions.x25519-dalek]]
-version = "3.0.0"
-criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
 version = "0.8.59"

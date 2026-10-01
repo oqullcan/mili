@@ -1,6 +1,287 @@
 
 # cargo-vet audits file
 
+[[audits.aead]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.6.1"
+notes = """
+Traits only: `AeadInPlace`, `AeadInOut`, `AeadCore`, `KeyInit` and the
+`Buffer` type parameter that says how much space a tag needs. No unsafe.
+
+The one thing a trait crate can do here is decide whether tag verification happens
+before plaintext is released, and this one does not decide anything: it has no
+implementation. `encrypt_inout_detached` and `decrypt_inout_detached` are declared
+without a body and the implementations live in `chacha20poly1305`, which was read
+separately and where the tag check is confirmed to happen before any plaintext is
+moved out.
+
+`AeadInOut::encrypt_in_place` panics on a full buffer per its own documentation,
+while the `_detached` forms return a `Result`. mili uses `AeadInOut` and the
+detached forms, and it sizes its buffers with `Buffer::<U16>::to_tag` rather than
+trusting a message length, so it cannot reach the panic by passing a buffer that is
+already full.
+
+Dependencies are `cipher`, `crypto-common`, `inout` and `subtle`.
+"""
+
+[[audits.argon2]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+notes = """
+2195 lines with 13 unsafe blocks, and this is the crate that derives every key from
+a password, so it is the largest single source of key material in the tree.
+
+What the unsafe does, in three groups:
+
+- `Blocks` allocates the working memory with `alloc_zeroed` and hands it back as a
+  slice with `from_raw_parts_mut`. `Layout::array` is checked and `NonNull::new`
+  turns an allocation failure into `None` rather than a null dereference, so the
+  slice construction cannot be handed a null pointer. `Drop` recomputes the same
+  layout with `unwrap_unchecked` and deallocates, which is sound because it is the
+  layout `new` validated and `len` has not changed.
+
+  Worth recording: `Drop` does *not* zeroize. It deallocates and returns the pages
+  to the allocator without clearing them. mili does not use this allocation path
+  for its key file or backup derivation, because `mili-core` passes its own
+  `Vec<Block>` to `hash_password_into_with_memory` precisely so that it can zero the
+  blocks on drop. The `alloc_zeroed` path is what the crate's own allocating
+  convenience entry point uses, and `hash_password_into` is documented as not
+  clearing its working memory. That is the reason for mili's own `WorkingMemory`,
+  and this audit is where that comment in `keyfile.rs` is justified.
+
+- `SegmentView` indexes the block array with `add(index)` behind two asserts: the
+  index is below `block_count`, and the index is on this lane or on another slice,
+  so it cannot be mutably aliased. The aliasing assert is the interesting one and it
+  is present in both `get_block` and `get_mut_block`. The SAFETY comment explains
+  the reasoning rather than asserting it.
+
+- `compress_avx2` is a `#[target_feature(enable = "avx2")]` function reached only
+  when the cpufeatures token says AVX2 is present, which is the same dispatch
+  pattern `poly1305` uses.
+
+Line 19 is `#![allow(clippy::undocumented_unsafe_blocks, ...)]`, so like `cmov`
+and `zeroize` the crate has deferred its own documentation pass. The blocks read
+here carry SAFETY comments.
+
+The KDF itself is pure Rust with no secret-dependent branching: the fill loops
+index by lane and pass, both derived from the validated parameters. mili validates
+the parameters before calling, and `SPEC.md` section 7.2 bounds them so that a file
+cannot ask for an unbounded amount of work.
+
+No network, no filesystem, no process spawning. Dependencies are `base64ct`,
+`blake2` and `zeroize`, all reviewed separately; `password-hash` is optional and not
+compiled here, since mili turns default features off and calls
+`hash_password_into_with_memory` rather than the PHC string API. `base64ct` reaches
+this crate through exactly one call, `Salt::from_b64`.
+"""
+
+[[audits.base64ct]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.8.3"
+notes = """
+2092 lines, 10 unsafe lines in one file, `src/encoding.rs`, all with SAFETY comments.
+This crate reaches mili through exactly one call: `argon2`'s
+`Salt::from_b64`, which decodes an unpadded base64 salt string. mili's own keyfile
+parsing does not use base64 and `mili-core` does not reference this crate at all,
+so the reachable surface is one decode into a fixed size buffer.
+
+What was checked:
+
+- `Base64::decode` writes into a caller provided buffer and returns the number of
+  bytes written, so it cannot write past the buffer. The in-place loop is what needs
+  care since input and output are the same buffer: each 4-byte input chunk is
+  decoded into a 3 byte temporary and only then copied back, and the pointer
+  arithmetic is bounded by `full_chunks = buf.len() / 4` with debug assertions on
+  every index.
+- The trailing partial chunk is rejected unless it is 0 or at least 2 bytes, which
+  is accumulated into `err` rather than branching on the data, and `tmp_in` is
+  pre-filled with `b'A'` so the padded positions decode to zero.
+- `encode` ends in `str::from_utf8_unchecked` on the output. That is sound for
+  exactly one reason: the base64 alphabet is ASCII, so every byte the encoder writes
+  is a valid one-byte UTF-8 character, and the crate keeps a `debug_assert!(str::
+  from_utf8(dst).is_ok())` immediately above it. mili only decodes, so even that
+  branch is not reached from mili's path.
+
+No build script, no network, no filesystem, no process spawning. No dependencies.
+"""
+
+[[audits.blake2]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.11.0"
+notes = """
+824 lines with one unsafe line, which is a `#![allow]` rather than a block. The
+crunch is portable Rust with no intrinsics, so there is no backend dispatch to
+check and no feature to detect.
+
+This is the hash inside Argon2id, so it runs on the password and on every derived
+value. It reads the key and the message into a state and permutes; there is no
+secret-dependent branch, and the compression function is a fixed sequence of XOR,
+rotate and add over the state.
+
+`Params` is a value the caller supplies, and `Params::new` returns `Result` rather
+than panicking on a bad degree, so a hostile parameter set cannot turn into a panic
+inside mili's Argon2 call. mili never passes one anyway: it builds the parameters
+itself and bounds them per `SPEC.md` section 7.2, so the only reachable call is
+with the documented profile.
+
+No build script, no network, no filesystem, no process spawning. Dependency is
+`digest` and `cfg-if`.
+"""
+
+[[audits.block-buffer]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.12.1"
+notes = """
+756 lines with 22 unsafe lines. This is the eager buffering layer under `digest`,
+so it is on the Argon2 and HMAC paths.
+
+The crate sets `#![allow(clippy::undocumented_unsafe_blocks)]` with a TODO to
+document all its unsafe blocks, so the SAFETY comments are present but partial.
+The blocks were read anyway:
+
+- `Clone for BlockBuffer` is `ptr::read(self)` with a comment that the type has no
+  `Drop` and so cannot be double-dropped. That is the actual soundness condition
+  and it holds; `BufferKind` is a marker and no implementation adds a destructor.
+- `digest_blocks` copies the buffered tail into the buffer, then calls
+  `assume_init_ref` to treat the whole buffer as one initialised block. This
+  deliberately breaks the buffer's eager invariant, and the `ResetGuard`'s `Drop`
+  restores it, including on a panic path. `left.len()` is the number of remaining
+  buffered bytes by the cursor, so the copy is bounded, and `leftover` from
+  `split_blocks` is documented to be smaller than a block, which is what
+  `set_data_unchecked` requires.
+
+The unsoundness this crate could have is reading uninitialised memory, and the
+guard plus the `Eager` versus `Lazy` `BufferKind` split is the mechanism that
+prevents it. `Digest` never gets to see the buffer's uninitialised tail.
+
+No build script, no ambient capabilities. Dependencies are `hybrid-array` and
+`typenum`.
+"""
+
+[[audits.cfg-if]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.0.5"
+notes = """
+218 lines, no unsafe, no build script, and it is a single `macro_rules!` macro.
+`cfg_if!` turns nested `#[cfg]` attributes into ordinary control flow so both sides
+still typecheck under the `unexpected_cfgs` lint.
+
+A proc macro crate cannot do damage here in the usual ways: this one expands to
+`#[cfg]` attributes and `else` blocks and contains no code generation and no
+expression evaluation. The risk in such a macro is producing a construct that
+silently changes which code is compiled, and this one emits only `#[cfg]`-gated
+`if` arms, so the backend selection in `chacha20`, `poly1305` and `sha2` reads the
+same at the source level as the `cfg` attributes that gate it.
+
+This crate appears on a production edge only as a dependency of the three
+dispatching crates above. It is not a build dependency and does not run anything.
+
+No dependencies.
+"""
+
+[[audits.chacha20]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.10.2"
+notes = """
+1052 lines of orchestration plus 2765 lines of backends. 73 unsafe lines, all of them
+in the four architecture specific backends: avx512.rs 23, sse2.rs 14, avx2.rs 12,
+neon.rs 11. `soft.rs`, the backend that mili would run on a target without SIMD, has
+zero unsafe. `src/lib.rs` holds the 7 and `src/rng.rs` the 6, and those are the
+`target_feature` blocks and the `unsafe` call sites in the dispatch chain.
+
+This crate was the last gap in the `chacha20poly1305` audit note, which claimed both
+halves had been reviewed separately when only this one had not. It is reviewed here,
+so that claim is now true rather than being softened.
+
+What was checked:
+
+- The dispatch chain in `src/lib.rs` is a cascade of `cfg_if` blocks that ends in a
+  runtime check on `cpufeatures::InitToken`s. `Tokens` is `()` when a backend is
+  chosen at compile time, and a tuple of tokens otherwise, and the same code path
+  cannot pick a backend the token has not vouched for. Each `unsafe` block carries a
+  SAFETY comment naming the token check as the reason.
+- The token pattern is the same one `cpufeatures` guarantees: one detection per
+  process, no data in the token, so `avx512_token.get()` cannot change between two
+  blocks of the same message. That matters more here than in a hash, because the
+  backend is chosen per keystream block.
+- `new_internal` is where a length could panic, and it asserts
+  `matches!(iv.len(), 4 | 8 | 12)`. mili passes a 96 bit nonce, so the 12 byte arm.
+  There is one `unwrap` on a 4 byte chunk conversion, which the crate attributes to
+  an MSRV limit on `[T]::as_chunks`; the chunks come from a `[u8; 32]` key and a
+  nonce whose length was just asserted, so the conversion cannot fail.
+- The counter is incremented with `wrapping_add` on the low word and the high word
+  updated only when `V::Counter` is 8 bytes wide. Nonce reuse is the hazard here,
+  and `SPEC.md` section 5.3's 96 bit nonce plus a strictly increasing counter is the
+  property that keeps it from happening. mili never calls `apply_keystream_b2b` or
+  any of the seek methods: it reaches ChaCha20 only through
+  `ChaCha20Poly1305::encrypt_inout_detached`, so the panic on mismatched buffer
+  lengths in `cipher`'s default `apply_keystream_b2b` is not on mili's path, and
+  `StreamCipherSeek`'s ability to rewind the keystream is not reachable either.
+
+No build script, no ambient capabilities. Dependencies are `cfg-if`, `cipher`,
+`cpufeatures` and `rand_core` optionally.
+"""
+
+[[audits.chacha20poly1305]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.11.0"
+notes = """
+431 lines with no unsafe at all and no build script. This is mili's only AEAD, so
+it was read in full.
+
+It is a thin composition of `chacha20` and `poly1305`: `KeyInit` splits a 32 byte
+key into the ChaCha20 key and the Poly1305 one, `AeadInPlace::encrypt_in_place`
+computes the Poly1305 tag over the ciphertext and appends it, and
+`AeadInPlace::decrypt_in_place` splits the trailing 16 bytes off, verifies, and
+only then decrypts.
+
+Two properties matter here and both are visible in the code:
+
+- The tag is verified before the ciphertext is decrypted. That is why mili can say
+  a decrypt either authenticates or does not, and why `open_in_place` never returns
+  plaintext for a modified file.
+- The nonce is an ordinary function argument, not a counter the crate maintains, so
+  this crate cannot itself cause a nonce reuse. mili keeps the nonce at twelve zero
+  bytes for the sealed box and a counter plus a flag byte for the stream, and
+  `SPEC.md` section 2.3 is where that discipline is argued. The crate is not where
+  the guarantee comes from and does not claim it is.
+
+The 431 lines are almost entirely trait impls delegating to the two halves, both
+reviewed separately. Dependency is `aead`, `chacha20`, `poly1305` and `universal-hash`.
+"""
+
+[[audits.cipher]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.5.2"
+notes = """
+2627 lines, `#![forbid(unsafe_code)]`, no build script, no ambient capabilities.
+`StreamCipher`, `BlockEncrypt`, `BlockDecrypt`, `KeyIvInit`, `StreamCipherSeek`,
+`StreamCipherCore` and the buffered variants.
+
+No unsafe. The trait crate cannot violate the properties mili relies on, and the
+two that matter are on the implementations: a stream cipher whose block function
+has a data dependent branch is not mili's to fix, and the backend selection in
+`chacha20` is audited there.
+
+`BufferedStreamCipher` was read because it is where a length from the caller
+becomes an offset: it uses `BlockSize` from the implementation and bounds the
+destination before each block, and `apply_keystream_b2b` checks the source and
+destination lengths together rather than assuming they are equal. mili does not use
+the buffered variants; it uses the in-place `AeadInPlace` path from
+`chacha20poly1305`, audited separately.
+
+Dependencies are `inout`, `crypto-common` and `generic-array` optionally.
+"""
+
 [[audits.cmov]]
 who = "mili maintainers"
 criteria = "safe-to-deploy"
@@ -41,6 +322,60 @@ upstream owes itself, written here rather than upstream.
 No build script, no filesystem, no network, no process spawning.
 """
 
+[[audits.cpufeatures]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.3.1"
+notes = """
+589 lines with 11 unsafe blocks, all in `new_macro_support` or the x86 CPUID
+assembly. This is the gate that `sha2`, `poly1305`, `keccak` and `argon2` all use
+to decide whether an accelerated backend is safe to call, so a bug here would be a
+bug in four places at once.
+
+The design is what makes those four call sites sound, and it is worth stating: the
+`new!` macro declares one `static STORAGE: AtomicU8` per feature, an `InitToken`
+holding a `()`, and `get()` as a relaxed atomic load comparing against 1. The
+detection happens once, the token is `Copy` and carries no data, and `get()` cannot
+change for the life of the process. So every `if token.get() { unsafe { accel() } }`
+in the tree above is a decision made once before the first call, not a check that
+could flip between two calls. That is what makes a union dispatch sound, and it is
+why `poly1305` can hold a `union Inner` of two different `State` layouts.
+
+The unsafe itself is CPUID and XGETBV assembly on x86, and equivalent
+capability-word reads elsewhere. The blocks read here carry SAFETY comments, and
+the crate denies the undocumented-unsafe lint rather than allowing it.
+
+No network, no filesystem, no process spawning. No dependencies.
+"""
+
+[[audits.crypto-common]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+notes = """
+853 lines, `#![forbid(unsafe_code)]`, no build script, no ambient capabilities.
+The `Key`, `KeyInit`, `KeySizeUser` and `ArraySizeUser` machinery, and the
+re-export of `hybrid_array` and `typenum` that the rest of the tree reaches through
+it.
+
+No unsafe. The trait crate defines no logic beyond `KeyInit::new_from_slice`,
+which is where a length check belongs and where it is:
+
+    if key.len() != <Self as KeySizeUser>::KeySize::USIZE { return Err(InvalidLength) }
+
+So a key of the wrong length is refused rather than zero-padded or truncated.
+mili's typed key types are `SecretBytes<N>` rather than this `Key<N>`, so this
+path is not what a mili caller uses, but `hmac`, `aead` and `poly1305` all do.
+
+The `rand_core` re-export is worth naming: `crypto-common` decides where
+`CryptoRng` comes from for every crate above it in this tree, and it is a
+re-export of the `rand_core` version the workspace pins. It cannot be a second,
+different entropy source, which is the property `SPEC.md` section 9 needs for
+X-Wing's encapsulation.
+
+Dependencies are `hybrid-array`, `typenum` and `rand_core` optionally.
+"""
+
 [[audits.ctutils]]
 who = "mili maintainers"
 criteria = "safe-to-deploy"
@@ -59,6 +394,175 @@ through an `if`.
 
 No build script, no ambient capabilities. Dependency is `cmov`, reviewed
 separately.
+"""
+
+[[audits.curve25519-dalek]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "5.0.0"
+notes = """
+34619 lines, and this is the largest crate in the tree. It is exempted in the sense
+that a full audit was not performed; what follows is what was read, which is the
+build script, the unsafe surface, the constant time ladder and one checked
+constant. It is recorded as a partial review rather than folded into the count of
+completed ones, and `supply-chain/README.md` says so.
+
+The build script is the part that had to be read, because `SPEC.md` section 16
+claims no build script in the tree reads the network, the clock or the environment
+to produce different output, and this is by far the largest build script here. It
+reads `CARGO_CFG_TARGET_FEATURE`, `CARGO_CFG_TARGET_ARCH`,
+`CARGO_CFG_TARGET_POINTER_WIDTH` and the two crate's own override variables, and
+writes `rustc-cfg` values. It does not create or write any file, so the 12,000
+lines of `constants.rs` across the four backends are committed rather than
+generated, which is worth knowing: there is no codegen step whose output could
+differ between two builds of the same commit.
+
+The only process it spawns is `rustc -vV`, through `rustc_version`, to learn the
+compiler version. That is the one exception to "no build script reads the
+environment", and it is recorded here rather than discovered later: the output of
+`rustc -vV` decides one cfg, and the crate gates the AVX-512 backend on a rustc
+version comparison. A hostile `rustc` would be a hostile build, not a hostile
+dependency, and `SPEC.md` section 16's claim is about the former.
+
+The unsafe is 34 blocks in the AVX2 and IFMA vector backends, all behind
+`#[unsafe_target_feature]` attributes applied by the `curve25519_dalek_derive`
+proc macro. That macro is the thing worth naming: it applies `#[target_feature]`
+and, on old compilers, the `allow(unused_unsafe)` the crate wants. The `simd`
+backend selection in `build.rs` is compile-time gated on `is_capable_simd` and a
+capability it cannot satisfy is a `panic!` in the build script rather than a
+silent fallback, so a target that cannot support the requested backend fails the
+build.
+
+The constant time property was checked in the Montgomery ladder, which is what
+X-Wing's X25519 half uses. `mul_bits_be` is a two point differential addition
+chain: for each bit it computes `conditional_swap` from `prev_bit ^ cur_bit` and
+then runs `differential_add_and_double`, with one unconditional `conditional_swap`
+after the loop. So the number of operations is fixed by the scalar's bit length
+and never by a secret bit, and the swap that would leak the bit is the same swap
+every iteration. `subtle`'s `conditional_select` is what makes each swap a mask
+rather than a branch.
+
+One constant was checked against an independent derivation rather than read: the
+`MINUS_ONE` field element in `backend/serial/u64/constants.rs`. That file is 7781
+lines of limb literals, so reading it line by line would be the least efficient
+use of an audit. `MINUS_ONE` should be p-1 for p = 2^255-19 in 51-bit limbs, so
+`p-1 = 2^255-20 = (2^51-20) * 2^204 + (2^204-1)`, giving a first limb of
+2251799813685228 and four limbs of 2251799813685247. The source says exactly that,
+so the limb representation and the field prime agree with the derivation rather
+than only with each other.
+
+What was not read: the field arithmetic in `backend/serial/u64/field.rs`, the
+scalar arithmetic, and the AVX2 and IFMA backends. Those are where a bug in this
+crate would live, and this audit does not claim otherwise. `cargo vet suggest`
+puts this crate in the backlog for that reason.
+"""
+
+[[audits.curve25519-dalek-derive]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+notes = """
+466 lines, a proc macro, no build script.
+
+Its only job is `#[unsafe_target_feature]`, which expands to `#[target_feature]`
+plus, on compilers older than what the crate wants, an `allow(unused_unsafe)`. It
+generates no code of its own and has no ambient capability: a proc macro runs at
+compile time with the same authority as a build script, and this one only rewrites
+an attribute.
+
+The risk in a proc macro that rewrites `unsafe` attributes is that it could attach
+`target_feature` to a function that does not use those instructions, which the
+compiler is entitled to take as a promise. Reading the expansion shows it adds the
+attribute the source already names and nothing else, so the promise is the author's
+and stays the author's.
+
+Dependency is `proc-macro2` and `syn`, both audited in this tree or exempted with
+a note.
+"""
+
+[[audits.digest]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.11.3"
+notes = """
+2857 lines, `#![forbid(unsafe_code)]`, no build script, no ambient capabilities.
+Trait definitions and the incremental absorb/squeeze machinery: `Digest`,
+`Update`, `FixedOutput`, `Reset`, `VariableOutput`, `ExtendableOutput`, and the
+`core_api` wrappers.
+
+There is no unsafe to review. What was checked instead is the one place where a
+trait crate can leak behaviour into its implementations: the buffer handling in
+the incremental state, because an implementation that trusts a length from here
+would inherit the trust.
+
+`CoreWrapper` and the buffer wrappers size every buffer with `BlockSize` from the
+implementor's associated type rather than from a runtime value, and
+`BlockBuffer::digest_blocks` returns `CtOutput<Self>` with the length coming from
+the output size user, not from the input. So a hash fed a message of any length
+produces a digest of the fixed output size, and nothing here can be made to emit a
+digest whose length an attacker controls.
+
+mili reaches this through `hkdf` and through `sha2`, and it uses `Hmac<Sha256>`
+from `hmac`, which is a separate audit. Dependencies are `block-buffer`,
+`crypto-common`, `subtle` and `const-oid` optionally.
+"""
+
+[[audits.ed25519]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "3.0.0"
+notes = """
+947 lines, `#![forbid(unsafe_code)]`, no build script, no ambient capabilities.
+The Ed25519 half of mili's composite signature, reduced to `SigningKey`,
+`VerifyingKey`, `Signature` and `ExpandedSecretKey`.
+
+No unsafe, which is the notable thing here rather than a formality: Ed25519
+verification is the part of a signature scheme where an implementation most often
+reaches for a secret-dependent comparison, and this one is written in safe Rust
+on top of `curve25519-dalek` with `ct_eq` from `subtle` for the group equation
+check. So the constant time property is a consequence of the crate's design rather
+than of an audit finding, and it is recorded here because mili's
+`THREAT_MODEL.md` section 3.6 leans on it.
+
+`Signature::from_bytes` rejects a non-canonical `s` at or above the group order, so
+a malleable encoding is refused rather than accepted, and `verify` is the only
+path that turns bytes into a decision.
+
+mili's composite rule means an Ed25519 signature is never sufficient on its own:
+`mili-core` requires both components to verify. See `THREAT_MODEL.md` section 2
+and the LAMPS Appendix E vectors.
+
+Dependencies are `curve25519-dalek`, `digest`, `subtle`, `signature` and `zeroize`.
+"""
+
+[[audits.ed25519-dalek]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "3.0.0"
+notes = """
+3552 lines with no unsafe at all. All four hits for "unsafe" in the source are
+documentation: three references to a MystenLabs write-up and one in a comment. The
+crate is safe Rust throughout.
+
+mili enables `alloc` and `zeroize` with default features off, so none of the
+optional surface is compiled in. That matters for one item specifically: the
+`hazmat` module's `raw_sign` and `ExpandedSecretKey`, documented with a
+"cryptographically unsafe" warning about leaking the signing key if the expanded
+key is built with the wrong values, and reachable only through `ExpandedSecretKey`,
+which mili never names. The feature gate and the type are two independent barriers
+and mili uses neither.
+
+The signature mili produces is deterministic and verifiable, which is what
+`THREAT_MODEL.md` section 3.6 claims: the nonce is derived from the message
+prefix and the key rather than drawn from an RNG, so there is no randomness to
+reuse and no second nonce to leak.
+
+The actual arithmetic is `ed25519` and `curve25519-dalek`, audited separately, and
+the constant time comparison is `subtle`, also audited. This crate is the
+orchestration, and there is nothing in it that can be exploited.
+
+Dependencies are `curve25519-dalek`, `ed25519`, `signature`, `sha2`, `subtle`,
+`zeroize` and `keccak` only for the optional `batch` feature mili does not enable.
 """
 
 [[audits.getrandom]]
@@ -133,6 +637,140 @@ The one `expect` in `finalize` is on a PRK the function itself just produced at
 the hash output size. Dependencies are `hmac` and `digest`.
 """
 
+[[audits.hmac]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.13.0"
+notes = """
+466 lines across four files, no unsafe. HMAC over `EagerHash` digests, in both the
+block API and the `SimpleHmac` variant.
+
+mili reaches this only through `hkdf`, which uses it for `extract` and never for
+`verify`. That means the tag comparison in `digest`'s `Mac` blanket impl, which is
+what `verify_slice` uses, is not on mili's path at all. The comparison is
+constant time where it exists: `ct_eq` on the full slice after a length check that
+rejects a tag of the wrong length before comparing, so a caller cannot turn a
+truncated tag into a prefix comparison.
+
+What was read in the construction is the part that would silently produce a wrong
+MAC. `get_der_key` implements the key derivation from RFC 2104 and both branches
+matter:
+
+- A key at or below the block size is zero-padded to the block size, and the
+  padding is `Block::<D>::default()`, so the unused tail is zeros rather than
+  leftover memory.
+- A key longer than the block size is hashed first. The inner `if hash.len() <=
+  der_key.len()` is evaluated at compile time because `OutputSize` and `BlockSize`
+  are `typenum` consts, so the branch disappears from the binary and the awkward
+  case of a hash whose output is larger than a block cannot silently truncate.
+
+`SimpleHmac` stores `opad_key` as a `Block<D>` and never zeroes it; mili uses the
+block API HMAC through hkdf, not `SimpleHmac`, so that is not mili's state. Worth
+recording rather than acting on, since hkdf's `expand` output is wrapped by the
+caller.
+
+Dependencies are `digest` and `block-buffer`.
+"""
+
+[[audits.hybrid-array]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.4.15"
+notes = """
+3229 lines with 43 unsafe hits. This is the fixed size array type the whole
+RustCrypto tree uses for keys, blocks and ciphertexts, and it is the first crate in
+the tree where `MaybeUninit` appears, so it needed a real look rather than a
+count.
+
+The unsafe is concentrated in three places and each is the standard construction:
+
+- `from_fn.rs` fills a `MaybeUninit` array from a closure. `Array::from_fn` calls
+  the closure for every index, and `try_from_fn` bails on the first `Err` leaving
+  a partially initialised array that is dropped, not transmuted. The one
+  `assume_init` is after the fallible fill returned `Ok`, which means every element
+  was written, and that is what the SAFETY comment says.
+- `flatten.rs` and `unflatten.rs` are `ptr::read` transmutes between
+  `[[T; K], M]` and `[T; K*N]`. These are sound because Rust's array layout is
+  contiguous with no padding, so the two types have identical representations. The
+  `ManuallyDrop` wrapper on the source is what makes it a move rather than a
+  read of a value that then gets dropped a second time.
+- The rest are the `Drop` and indexing paths.
+
+The trait that makes lengths non-attacker-controlled is `ArraySize`, a `typenum`
+const, so every array in the tree has a size fixed at compile time. That is why the
+`KeySizeUser::new_from_slice` check in `crypto-common` can compare against a value
+rather than a parsed length.
+
+No build script, no ambient capabilities. Dependencies are `zeroize`, `typenum`
+and `const-generics`.
+"""
+
+[[audits.inout]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+notes = """
+859 lines with 30 unsafe lines, all in `src/inout.rs`, all dereferencing two raw
+pointers. This is the in-place encryption abstraction that `aead`,
+`chacha20poly1305` and `poly1305` are written against, so it sits directly under
+mili's authenticated encryption path.
+
+The type is a pair of pointers, one in and one out, plus a `PhantomData`. The unsafe
+is `&*self.in_ptr` and `&mut *self.out_ptr`, and the soundness argument is the
+lifetime: `InOut<'inp, 'out, T>` ties the input borrow to `'inp` and the output
+borrow to `'out`, and `from_raw` is the only way to build one from pointers, and it
+is `unsafe` for exactly that reason. A caller cannot obtain a `&mut T` that
+outlives the buffer it points into, because the lifetime is carried in the type.
+
+The one case worth reading is `into_out_with_copied_in`:
+
+    if !core::ptr::eq(self.in_ptr, self.out_ptr) {
+        ptr::copy(self.in_ptr, self.out_ptr, 1);
+    }
+
+The aliasing check is there because the in-place API is called with the same buffer
+for both, and copying a value onto itself through a `&mut` while a `&` to it exists
+would be the bug. That guard is what makes the common in-place call sound, and it
+is the reason `Poly1305::compute_unpadded` being called with the tag's own
+destination is not a self-overwrite.
+
+mili's own usage is the in-place AEAD seal and open on a single buffer, so this is
+the path that runs.
+
+No build script, no ambient capabilities. Dependency is `hybrid-array`.
+"""
+
+[[audits.keccak]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+notes = """
+664 lines, all unsafe confined to `backends/aarch64_sha3.rs`, no build script.
+
+The dispatch: `src/backends.rs` gates `aarch64_sha3` on
+`all(target_arch = "aarch64", not(target_abi = "softfloat"))`, gates `simd` on an
+explicit `keccak_backend` cfg, and includes `soft` unconditionally. `with_backend`
+then selects by cfg and falls through to `soft` on this target.
+
+So on a build that does not target aarch64, none of the unsafe is compiled. That
+is the claim to record, and it is a `cfg` on the module declaration rather than a
+runtime check, so it cannot be reached by a misdetected CPU. The `keccak_backend
+= "aarch64_sha3"` path carries three `compile_error!`s for a non-aarch64 target,
+a softfloat ABI, or a missing `sha3` target feature, which is the same
+compile-time enforcement `sha2` uses for `x86-sha`.
+
+The aarch64 backend's unsafe is inline asm for the p1600 permutation behind
+`#[target_feature(enable = "sha3")]` plus shared state threading through a closure.
+Not compiled here and not audited in detail, and recorded as such.
+
+Keccak's output is not secret in the way a key is: SHA3-256 is used by mili in
+HKDF and in X-Wing's combiner, both as an unkeyed hash or MAC-like construction
+where there is no key to leak through timing. That is why the backend dispatch,
+and not the arithmetic, is what was checked here.
+
+Dependencies are `cfg-if` and `cpufeatures` on aarch64.
+"""
+
 [[audits.kem]]
 who = "mili maintainers"
 criteria = "safe-to-deploy"
@@ -151,6 +789,437 @@ decides where entropy comes from.
 Dependency is `crypto-common` with the `rand_core` feature, reviewed separately.
 """
 
+[[audits.libc]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.189"
+notes = """
+129594 lines with 673 unsafe lines, and this is an exemption rather than a full
+audit. What was read is the build script and the shape of the unsafe, which is
+enough to state what the crate is.
+
+`libc` is a declaration crate: it is FFI type and function signatures for the C
+standard library plus the platform-specific extras, and it contains no algorithms.
+The unsafe is almost entirely `unsafe extern "C" fn` declarations and `unsafe impl
+Send`/`Sync` for opaque platform handles such as `DIR`, `FILE` and sockets. Those
+manual `Sync` impls are the standard and necessary pattern for a type that is only
+safe to use behind the C library's own locking, and they are attached to the handle
+types the platform docs describe as thread-safe.
+
+The build script is 393 lines and does not write any file: no `File::create`, no
+`fs::write`, no `OUT_DIR`. What it does write are `rustc-cfg` values derived from
+`CARGO_CFG_TARGET_ENV`, `CARGO_CFG_TARGET_OS`, `CARGO_CFG_TARGET_POINTER_WIDTH` and
+`CARGO_CFG_TARGET_ARCH`, which is the same class of decision `curve25519-dalek` and
+`chacha20` make. It calls `rustc --version` to get a minor version, via the same
+`rustc_version_cmd` helper, which is the second crate in the tree that shells out
+and is the same argument as in the `rustc_version` audit: cargo sets the compiler,
+so this is the compiler's own trust boundary rather than a new one.
+
+`SPEC.md` section 16's claim about build scripts should be read with this one in
+mind: two crates in the tree run a compiler version command, and neither writes a
+generated file. mili reaches `libc` only through `getrandom`, for the OS entropy
+entry point, so the production surface is a small fraction of the 129k lines and
+none of it is an algorithm.
+
+What was not read: the per-platform signature tables. A wrong signature would be a
+compiler error or an ABI mismatch rather than a logic bug, and this audit makes no
+claim beyond the build script and the unsafe shape.
+"""
+
+[[audits.ml-dsa]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+notes = """
+3735 lines, no unsafe at all, no build script, no ambient capabilities. This is the
+ML-DSA-65 half of mili's composite signature and one of the two primitives the
+whole library is named for.
+
+Signing was checked for determinism, because `THREAT_MODEL.md` section 3.6 makes a
+claim about it:
+
+    pub fn sign_deterministic(&self, M: &[u8], ctx: &[u8]) -> Result<Signature<P>, Error> {
+        self.raw_sign_deterministic(&[M], ctx)
+    }
+    pub fn sign_mu_deterministic(&self, mu: &B64) -> Signature<P> {
+        let rnd = B32::default();
+        self.raw_sign_mu(mu, &rnd)
+    }
+
+The randomness `rnd` is a zeroed B32 and there is no RNG parameter anywhere on
+this path, so the same key and message produce the same signature. That is FIPS
+204's optional deterministic variant, and mili's claim that a signature carries no
+second nonce rests on this function rather than on a comment.
+
+Verification was checked for early exit, since an early exit on a malformed
+signature would be a timing signal:
+
+    let c = sample_in_ball(&sigma.c_tilde, P::TAU);
+    let z_hat = sigma.z.ntt();  ... let wp_approx = (&Az_hat - &ct1_2d_hat).ntt_inverse();
+    let w1p = sigma.h.use_hint(&wp_approx);
+    ... sigma.c_tilde == cp_tilde
+
+There is no early return: every field is decoded into a fixed size array and the
+whole computation runs to a single comparison at the end. So a signature that is
+malformed in different ways takes the same time, and mili's uniform error is not
+undercut by the primitive underneath it.
+
+The one branch that does exist is `if ctx.len() > 255 { return false }`, which
+depends on the caller's context length and not on the signature, and which exists
+because FIPS 204 requires it. mili passes an empty context, so it is not reached.
+
+The composite construction in `mili-core` adds the second component and the
+context binding, and is checked there rather than here: mili verifies both
+components and both transcript forms against
+`tests/vectors/lamps19_composite_ed25519.json`, which is the draft's own Appendix E.
+
+Dependencies are `crypto-common`, `hybrid-array`, `module-lattice`, `rand_core`
+optionally, `signature` and `zeroize` optionally.
+"""
+
+[[audits.ml-kem]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.3.2"
+notes = """
+2495 lines across nine files, no unsafe at all, no build script, no ambient
+capabilities. This is FIPS 203 final and it is the KEM half of X-Wing, so it is
+the crate mili's security rests on most directly.
+
+Decapsulation was checked first, because that is where a KEM goes wrong:
+
+    let mp = self.dk_pke.decrypt(encapsulated_key);
+    let (Kp, rp) = G(&[&mp, &self.ek.h()]);
+    let Kbar = J(&[self.z.as_slice(), encapsulated_key.as_ref()]);
+    let cp = self.ek.ek_pke().encrypt(&mp, &rp);
+    Kbar.ct_select(&Kp, cp.ct_eq(encapsulated_key))
+
+That is FIPS 203's implicit rejection: it re-encrypts and compares, and returns
+either the derived `Kbar` or the re-encrypted `Kp` through `ct_select` on whether
+the re-encryption matched. A malformed ciphertext therefore yields a shared secret
+that is not the sender's, and the selection is a constant time mask rather than a
+branch. `decapsulate` returns a value rather than a `Result`, which is what makes
+it sound: there is no error path to distinguish from the outside. mili's
+`SPEC.md` section 9 relies on exactly this when it says decapsulation never fails.
+
+`pke::decrypt` decompresses into fixed-size arrays rather than allocating to a
+parsed length, so a ciphertext cannot influence an allocation. `sample_ntt` has a
+rejection loop over the XOF output, and its termination is bounded by the fixed
+coefficient count rather than by the input, because it is `Array::from_fn` over a
+constant length array.
+
+The polynomial arithmetic is written on `Elem` with the multiplication and reduction
+expressed through `barrett_reduce` and shifts rather than `%`, so the reduction
+does not depend on the compiler's division behaviour, and the lint set includes
+`clippy::arithmetic_side_effects` and `integer_division_remainder_used`, which is
+the crate asserting the same thing this audit is checking.
+
+The ACVP vectors in `tests/vectors/acvp_mlkem768.json` are NIST's own, and
+`kem::tests::acvp_vectors_agree_with_the_key_agreement_they_were_generated_for`
+runs them through this crate. That is independent evidence, and it is the reason
+this audit can be short.
+
+Dependencies are `array` and `rand_core`, both trivial, and `zeroize` optionally.
+"""
+
+[[audits.module-lattice]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.3"
+notes = """
+932 lines, no unsafe at all, no build script, no ambient capabilities. The module
+lattice implementation ML-DSA needs: `RingElement`, `Polynomial`, and the
+polynomial and vector operations built on them.
+
+No unsafe to review. The two properties worth checking are constant time and length
+handling:
+
+- The ring arithmetic is additions, subtractions, multiplications and modular
+  reduction on `i32` with explicit wrapping, not on a secret-dependent branch. The
+  crate sets `clippy::arithmetic_side_effects` in its lint table, which is the
+  same assertion `ml-kem` makes and the reason this audit can be short.
+
+- Every element is a fixed size array chosen by a `typenum` const, not a length
+  taken from a parsed input, so a signature or key of the wrong length cannot reach
+  an element of a different size.
+
+mili reaches this through `ml-dsa`, which is the only user. This crate cannot
+choose a parameter set; it is handed one.
+
+Dependencies are `crypto-common`, `hybrid-array` and `typenum`.
+"""
+
+[[audits.num-traits]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.2.19"
+notes = """
+7815 lines with exactly one unsafe line, in `src/cast.rs`, inside a macro:
+
+    // SAFETY: Must not be NaN or infinite; must be representable as the integer
+    // after truncating. We already checked that the float is in the exclusive
+    // range `(MIN-1, MAX+1)`.
+    unsafe { $float.to_int_unchecked::<$int>() }
+
+The precondition is enforced immediately above by an explicit range check against
+compile-time `const` bounds computed from `$i::MIN` and `$i::MAX`, and the `MIN_M1`
+and `MAX_P1` arms are inside `if size_of::<$f>() > size_of::<$i>()`, so the
+unrepresentable case takes a different branch. The comment states the same
+condition the code checks, which is the property that makes this audit short: a
+`to_int_unchecked` whose guard could be skipped would be the classic float-to-int
+UB, and here the guard is the enclosing `if`.
+
+The rest of the crate is traits: `PrimInt`, `One`, `Zero`, `AsPrimitive`,
+`CheckedAdd`, `CheckedMul`, `Bounded`, `Euclid` and the float module. No
+algorithms, no unsafe, and `unconditional_recursion` is denied at the crate root.
+
+What mili actually reaches is narrower than the crate: `module-lattice` imports
+`PrimInt` and `One` only, and uses them as bounds on the integer type parameters
+behind the ring element operations. `ml-kem` and `ml-dsa` both go through
+`module-lattice`, so this crate is what gives those two a shared integer interface,
+and `Zero`/`One` are what the constant-time conditional negation and the R_q
+montgomery reduction are written in terms of. Neither the cast module nor the float
+module is on mili's path.
+
+No build script, no ambient capabilities. No dependencies.
+"""
+
+[[audits.poly1305]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.9.1"
+notes = """
+2891 lines with about 50 unsafe blocks, all in the AVX2 backend. This is the
+authentication half of mili's AEAD, so the backend dispatch was read rather than
+assumed safe.
+
+The dispatch is the thing to check. `autodetect::State` holds a `union Inner` of
+`ManuallyDrop<avx2::State>` and `ManuallyDrop<soft::State>`, and every one of the
+three `unsafe` call sites dereferences one member or the other behind
+`if self.token.get()`. `token` comes from `avx2_cpuid::init_get()`, and
+`cpufeatures::new!` implements `get()` as a relaxed atomic load of a value that is
+set once and never changes. So the CPU feature is detected before the first
+dereference and the branch cannot change afterwards: the union member chosen at
+construction is the member read for the lifetime of the value. Getting this wrong
+would be a type confusion across two different struct layouts, which is the worst
+kind of bug available here, and it is correct.
+
+Both union members are plain data with no heap pointers and no destructors, so
+`ManuallyDrop` is right and there is nothing to leak on drop. There is no `Drop`
+impl for the union, which is sound for the same reason.
+
+The AVX2 functions are `unsafe fn` with `#[target_feature(enable = "avx2")]` and
+are only reached through the token check above, which is what makes calling them
+sound; `compress_avx2` in the AVX2 backend is reached the same way.
+
+The partial-block caching in `compute_block` branches on `partial`, which is a
+property of the caller's message framing rather than of the key or the
+plaintext, and the accumulator arithmetic itself is the branchless multiply-add
+that Poly1305 requires. `key` is only ever read.
+
+No build script, no filesystem, no network, no process spawning. Dependencies are
+`universal-hash`, `cfg-if` and `cpufeatures`.
+"""
+
+[[audits.proc-macro2]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.0.107"
+notes = """
+6029 lines with a handful of unsafe lines in `fallback.rs` and `wrapper.rs`, plus
+`#![deny(unsafe_op_in_unsafe_fn)]` at the crate root, so every unsafe operation must
+sit inside an explicit block rather than being inherited from an `unsafe fn`.
+
+The design point is the `imp` module: `proc-macro2` has two implementations of the
+same types, one delegating to the compiler's `proc_macro` when it is available and a
+fallback that is its own lexer. `mili` is not a proc macro crate, so on a normal
+build the compiler-backed implementation is what runs and the fallback is compiled
+but unused. The unsafe is concentrated in the fallback's string handling and in
+`Literal::from_str_unchecked`, which is an `unsafe fn` precisely because it skips
+the validation the checked constructor performs.
+
+mili reaches this only through `syn` in `curve25519-dalek-derive`, at compile time.
+
+No build script, no ambient capabilities. Dependencies are `unicode-ident` and
+`quote`, and `quote` has no dependencies of its own.
+"""
+
+[[audits.quote]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.0.47"
+notes = """
+2702 lines, no unsafe at all, no build script, and it is the token stream construction
+half of the proc macro chain that `curve25519-dalek-derive` sits on.
+
+A proc macro that emits source text is a place where a bug becomes injected code, so
+what matters here is that `quote!` cannot emit anything the caller did not name. The
+macro is a `macro_rules!` that appends each interpolated value through its
+`ToTokens` implementation into a `TokenStream`; it does not format strings, so there
+is no path from a value's `Display` output into the emitted tokens. A `&str` becomes
+a string literal token rather than being pasted, so a value containing a quote or a
+brace cannot break out into new code. That property is what makes it safe for one
+proc macro to feed another's output.
+
+The crate's job here is narrow: it builds and concatenates token streams and knows
+nothing about attributes or parsing. The attribute emission that actually matters to
+this tree is `#[target_feature]`, and that comes from `curve25519-dalek-derive`.
+
+Compile-time only, and the output of the chain is a single `#[target_feature]`
+attribute.
+
+Dependency is `proc-macro2`, audited separately.
+"""
+
+[[audits.rand_core]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.10.1"
+notes = """
+1073 lines, no unsafe at all, no build script. This is the RNG trait crate that
+`SPEC.md` section 9 depends on for its claim about entropy, and it is a trait
+definition plus the seeding helpers.
+
+No unsafe and no entropy source: `CryptoRng` and `RngCore` are marker traits, and
+`impl RngCore for CryptoRng` is empty, so a type can be a `CryptoRng` only by
+naming that trait itself. The concrete sources in this tree are `getrandom`, audited
+separately, and `ChaCha20Rng` from `rand_chacha`, which is a deterministic stream
+cipher seeded from bytes and is not used for production entropy in mili.
+
+`seed_from_rng` propagates a seed error rather than panicking, and
+`TryRngCore::try_fill_bytes` is the fallible form, so a caller that wants to handle
+entropy failure can and one that does not will panic loudly rather than continue
+with an unseeded generator. mili never constructs an RNG in production at all: it
+reads seed bytes from the keyfile or the XOF, so this crate is a type boundary in
+the tree rather than a component mili runs.
+
+The one thing worth recording is that 0.10.1 and 0.9.5 are both in the lockfile.
+`crypto-common` and everything above it in the RustCrypto chain are on 0.10.1;
+`proptest` and its `rand` are on 0.9.5 and are dev dependencies. `SPEC.md` section
+9's entropy claim is about the production path, which is 0.10.1, and the 0.9.5
+side never runs in a deployed binary.
+
+Dependencies are `getrandom` optionally, for the `OsRng` helper.
+"""
+
+[[audits.rustc_version]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+notes = """
+424 lines, no unsafe, and this is the only crate in the tree that spawns a process.
+It runs `$RUSTC -vV` and parses the output. It is reached as a build dependency of
+`curve25519-dalek`, and it is not in the runtime graph at all: `cargo tree --edges
+normal -i rustc_version` finds nothing.
+
+The capability it needs is process execution, so the relevant questions are whether
+the command is attacker controlled and whether the output is trusted. The command
+is `env::var_os("RUSTC")` falling back to `"rustc"`, optionally through
+`RUSTC_WRAPPER`. Both are set by cargo for a build, so an attacker who can set them
+can already run code in the build; this is the same trust boundary as the compiler
+itself and not a new one.
+
+The output is parsed into a semver and, in `curve25519-dalek`'s case, compared
+against a rustc version to decide whether to enable an AVX-512 backend. That is a
+build configuration decision driven by the compiler's reported version, which is
+what the crate documents it does. A `rustc` that misreports its version could
+select a backend its codegen does not support, and that would be a compiler bug
+surfacing here rather than a supply chain attack.
+
+`semver`, its only dependency, is not audited here and is recorded as such.
+
+No network access and no filesystem writes of its own.
+"""
+
+[[audits.sha2]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.11.0"
+notes = """
+3151 lines with about 53 unsafe blocks, all in architecture specific backends. This
+is the hash under mili's HKDF, and under X-Wing's combiner it is not, so its
+correctness matters for every key mili derives.
+
+Backend dispatch was checked rather than assumed. `src/sha256.rs` selects in this
+order: an explicit `sha2_backend` or `sha2_256_backend` cfg, then
+`riscv-zknh`, `x86-sha`, `aarch64-sha2`, `loongarch64`, `wasm32_simd128`, and
+otherwise `soft`. Each accelerated backend is gated one of two ways:
+
+- When selected by cfg, the target features are checked at compile time and a
+  missing one is a `compile_error!`. So `x86-sha` cannot be built without `sha`,
+  `sse2`, `ssse3` and `sse4.1`, and reaching its `unsafe fn` is sound by
+  construction rather than by a runtime check.
+
+- In the default branch, `cpufeatures::new!(shani_cpuid, "sha", "sse2", "ssse3",
+  "sse4.1")` is declared and the `unsafe` call is behind `shani_cpuid::get()`, with
+  the SAFETY comment saying the features were checked. That is the same dispatch
+  shape `poly1305` and `argon2` use, and the `cpufeatures` macro sets the value
+  once so the branch cannot change afterwards.
+
+The soft backend, which is what a build with no accelerated features gets, has no
+unsafe at all, and that is the path a portable mili build takes. The aarch64 and
+riscv paths are `unsafe fn` with `#[target_feature]` and are reached only through
+the gates above.
+
+One thing recorded because it is easy to mistake for a defect: the crate has
+`clippy::undocumented_unsafe_blocks` allowed in some backends, as `cmov`,
+`zeroize` and `argon2` do. The blocks read here carry SAFETY comments.
+
+No network, no filesystem, no process spawning. Dependencies are `cfg-if`,
+`cpufeatures`, `digest` and `block-buffer`.
+"""
+
+[[audits.sha3]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.11.0"
+notes = """
+413 lines, `#![forbid(unsafe_code)]`, no build script. This is a separate version of
+the same crate as the 0.12.0 audit above, pulled in by `ml-kem`, which pins 0.11,
+while `x-wing` pins 0.12. Two versions of the same crate in one binary is a fact
+that belongs in this file rather than an assumption that "we audited sha3".
+
+0.11.0 is thin in a way 0.12 is not: it has no `lib.rs` arithmetic at all. Every type
+is a newtype around `keccak::f1600` with a `FixedHashTraits` or `XofHasherTraits`
+impl, so the permutation itself is entirely in `keccak` 0.2.2, which is audited
+separately. `Sha3_256`, `Sha3_384`, `Sha3_512`, `Shake128` and `Shake256` are all
+one-line declarations plus the `digest` trait wiring.
+
+mli does not call this crate directly. `ml-kem`'s `crypto.rs` uses `Sha3_256`,
+`Sha3_512`, `Shake128` and `Shake256` for the ML-KEM internal hashing and XOF draws,
+so this version is what runs for every ML-KEM-768 encapsulation, decapsulation and
+keypair, and the NIST ACVP vectors in `mili-core/src/kem.rs` exercise it directly.
+That the audited `keccak` backend is the one behind these vectors is worth stating:
+the ACVP pass is evidence about `keccak` as much as about `ml-kem`.
+
+`CollisionResistance` is implemented for both Shakes and is what stops a caller
+treating a XOF as a hash.
+
+Dependencies are `digest` and `keccak`.
+"""
+
+[[audits.sha3]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.12.0"
+notes = """
+246 lines, no unsafe at all, no build script, no ambient capabilities. This is the
+SHA3-3 and SHAKE wrappers X-Wing uses for its combiner and its key expansion.
+
+It is a thin type layer over `keccak`: `Sha3_256`, `Shake256`, `Shake128` and the
+incremental absorb/squeeze types, all of which delegate the permutation to
+`keccak::State1600` and add only the padding and the domain separation byte. There
+is no logic here that could go wrong beyond picking the wrong domain separator,
+and each constructor passes its own.
+
+`version = "0.12.0"` is the version X-Wing 0.1.0 pulls. mili also has `sha3 0.11`
+in the tree through ml-kem 0.3.2, and that one is exempted rather than audited
+separately; the two are the same crate at two versions and reviewing one and not
+the other is an oversight, recorded rather than hidden.
+
+No dependencies of its own beyond `keccak`, reviewed separately.
+"""
+
 [[audits.shake]]
 who = "mili maintainers"
 criteria = "safe-to-deploy"
@@ -166,6 +1235,29 @@ state to be misused. The XOF reader is `sponge-cursor`'s, reviewed separately,
 which is where the unsafe code in this subtree actually lives.
 
 Dependencies are `digest`, `keccak` and `sponge-cursor`.
+"""
+
+[[audits.signature]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "3.0.0"
+notes = """
+798 lines, `#![forbid(unsafe_code)]`, no build script, no ambient capabilities.
+`Signer`, `Verifier`, `DigestSigner`, `DigestVerifier`, `RandomizedSigner`,
+`Keypair` and `SignatureEncoding`.
+
+No unsafe. The one line worth recording is that `Signer::try_sign` is the only
+signature-producing entry point and it takes a `CryptoRng`, while
+`sign_deterministic` in `ml-dsa` does not. mili calls the deterministic one, so a
+caller cannot get a randomised signature out of mili by accident, and the
+randomised trait method is simply not re-exported from `mili-core`.
+
+mili builds its composite signature in `signature.rs` over this crate's traits
+rather than implementing the traits itself, which is what makes the draft's own
+Appendix E vectors usable as a test: the same `Signer` and `Verifier` a caller
+would use are what the vectors exercise.
+
+Dependencies are `digest`, `rand_core` and `signature` optionally.
 """
 
 [[audits.sponge-cursor]]
@@ -232,6 +1324,90 @@ No build script, no filesystem, no network, no process spawning, and no
 dependencies at all.
 """
 
+[[audits.syn]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "2.0.119"
+notes = """
+50120 lines, which is the largest source tree in the dependency graph, with 2 real
+unsafe lines, both in `src/buffer.rs`:
+
+    unsafe { Cursor::create(ptr, ptr.add(self.entries.len() - 1)) }
+    unsafe impl Sync for UnsafeSyncEntry {}
+
+The first builds a two-pointer cursor into an immutable token buffer, sound because
+the buffer is not mutated for the lifetime of the `Cursor` and the `PhantomData<&'a
+Entry>` ties both pointers to that borrow. The second puts a `static` `End` entry
+in global storage that is not otherwise `Sync`, because an `Ident` is a reference
+into a thread-local table; the entry is specifically constructed to contain no
+`Ident`, which is what makes the manual `Sync` impl sound, and the comment says so.
+
+Everything else in the crate is parsing Rust source into an AST and nothing else.
+mili's only route to it is `curve25519-dalek-derive`, which uses it to find
+`#[target_feature]` attributes and their arguments. So the parse tree is built from
+a small, known set of macro input rather than from untrusted source, and the output
+is an attribute on a function.
+
+Compile-time only. A proc macro is a normal dependency of the crate that uses it
+rather than a build dependency, which is why `cargo tree --edges normal` still
+lists it, but nothing in this chain is in the shipped binary.
+
+No build script, no ambient capabilities. Dependencies are `proc-macro2`,
+`unicode-ident` and `quote`.
+"""
+
+[[audits.typenum]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.20.1"
+notes = """
+19354 lines, `#![forbid(unsafe_code)]`, no build script. Almost all of that is
+compile-time arithmetic on `const` generics plus the `UInt`, `U16`, `U32`, `U64` and
+`Prod` type level integers.
+
+The crate is a large one to read for what it does, and the reason it is safe is
+structural: it computes values in `const fn` bodies and emits them as associated
+constants, so every number in the tree above is derived at compile time by the
+compiler's own const evaluator rather than parsed or computed at runtime. There is
+no `unsafe` and no runtime arithmetic to be constant-time about.
+
+This is also what makes the length checks in the tree load-bearing. `BlockSize`,
+`KeySize` and `OutputSize` are `typenum` consts, so `crypto-common`'s
+`new_from_slice` compares against a compile-time value and `block-buffer`'s
+`assume_init_ref` knows the block size statically. A crate that needed a runtime
+length would break that chain, and none in the tree does.
+
+`clippy::as_conversions` is denied at the crate level because the const arithmetic
+is full of conversions between integer types by design.
+
+No dependencies.
+"""
+
+[[audits.unicode-ident]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.0.26"
+notes = """
+957 lines with 2 unsafe lines, both in one function:
+
+    unsafe { LEAF.0.get_unchecked(offset) }.wrapping_shr(ch as u32 % 8) & 1 != 0
+
+That is a trie lookup for the XID_Start and XID_Continue tables used by Rust's
+identifier lexer. The soundness argument is the bound on `offset`, which is the
+substitute of the leaf's 64-bit key and therefore smaller than the table, and the
+indexing expression is masked to 6 bits by construction. Both calls are in the same
+expression and both are in one leaf test, so there is no partially guarded case.
+
+This crate reaches mili only at compile time: it is a dependency of `proc-macro2`,
+which is a dependency of `syn`, which is a dependency of `curve25519-dalek-derive`.
+`curve25519-dalek-derive` is a proc macro that emits `#[target_feature]` attributes
+and no code, so the whole chain is compile-time only and none of it is in the
+shipped binary. `cargo tree --edges normal` still lists it, because a proc macro is
+a normal dependency of the crate that uses it, not a build dependency.
+
+No build script, no network, no filesystem, no process spawning. No dependencies.
+"""
+
 [[audits.universal-hash]]
 who = "mili maintainers"
 criteria = "safe-to-deploy"
@@ -284,6 +1460,40 @@ the `CryptoRng` it is handed and zeroes them under the `zeroize` feature.
 
 Dependencies are `kem`, `ml-kem`, `sha3`, `shake`, `x25519-dalek` and
 optionally `getrandom` and `zeroize`.
+"""
+
+[[audits.x25519-dalek]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "3.0.0"
+notes = """
+432 lines, no unsafe at all, no build script, no ambient capabilities. This is the
+X25519 half of X-Wing, and it is a thin type layer over `curve25519-dalek`'s
+Montgomery ladder.
+
+What was checked is what X-Wing depends on. `StaticSecret::diffie_hellman` is
+`SharedSecret(their_public.0.mul_clamped(self.0))`, and `mul_clamped` is the
+curve25519 clamping X-Wing's `expand_key` relies on being done by the callee rather
+than by the caller: mili reads a 32 byte seed out of the SHAKE-256 XOF and hands it
+straight to `StaticSecret::from`, so if clamping were the caller's job X-Wing would
+be wrong.
+
+The contributory question is the one worth reading. `was_contributory` exists and is
+`!self.0.is_identity()`, which is the check for the small order point case. X-Wing
+does not call it, and does not need to: the combiner hashes `ss_x` together with
+`ct_x` and `pk_x`, so an all-zero X25519 half changes the combined output rather
+than being usable on its own, and `ml-kem`'s half still has to agree. That is the
+draft's design and this audit confirms the implementation gives it what it needs.
+
+`SharedSecret` has no public constructor from bytes, so a caller cannot inject a
+shared secret it did not agree on, and `Display` is not implemented so one cannot
+reach a log line.
+
+`EphemeralSecret` is not what X-Wing uses; X-Wing derives a `StaticSecret` from its
+seed. `EphemeralSecret` has no serialisation, so the compiler enforces one use per
+value, which is the property that variant exists for.
+
+Dependencies are `curve25519-dalek`, `getrandom` optionally and `zeroize`.
 """
 
 [[audits.zeroize]]

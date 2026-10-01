@@ -688,19 +688,31 @@ A build is reproducible from the repository alone when the following hold:
 - `Cargo.lock` is committed and every cargo invocation uses `--locked`.
 - Every dependency version is written as `=x.y.z` in `Cargo.toml`. Caret
   requirements are not used, so adding a dependency is always an explicit edit.
-- No build script in the dependency tree reads the network, the clock or the
-  environment to produce different output. `cargo deny` checks that a crate is
-  allowed at all, and `cargo vet` records whether anyone has read the code.
-  `getrandom` is the only build script in the tree, it is eleven lines, and
-  `supply-chain/audits.toml` records what it does: read `CARGO_CFG_SANITIZE` and
-  set one cfg so MemorySanitizer can unpoison its output.
+- No build script in the dependency tree reads the network or the clock. Three
+  crates in the tree have build scripts, and `supply-chain/audits.toml` records
+  what each one does:
+  - `getrandom` is eleven lines. It reads `CARGO_CFG_SANITIZE` and sets one cfg so
+    MemorySanitizer can unpoison its output.
+  - `libc` writes no file. It derives `rustc-cfg` values from
+    `CARGO_CFG_TARGET_ENV`, `CARGO_CFG_TARGET_OS`, `CARGO_CFG_TARGET_POINTER_WIDTH`
+    and `CARGO_CFG_TARGET_ARCH`.
+  - `curve25519-dalek` writes no file either, and reads the same `CARGO_CFG_*`
+    variables to pick a 32 or 64 bit backend. A backend the target cannot support
+    is a `panic!` in the build script rather than a silent fallback.
 
-  What `cargo vet check` passing does not mean is recorded in
-  `supply-chain/README.md`, and the short version is that it does not mean the tree
-  is audited. Most of the tree is exempted, which records that nobody has looked.
-  The primitive crates mili's security rests on most directly, `argon2`, `ml-kem`,
-  `ml-dsa`, `sha2`, `sha3`, `chacha20poly1305` and `ed25519-dalek`, are among the
-  unaudited ones.
+  Two of them, `libc` and `curve25519-dalek` through `rustc_version`, also run
+  `$RUSTC -vV` and use the reported version in a decision. Cargo sets the compiler,
+  so this is the compiler's own trust boundary rather than a new one, but it is the
+  reason the claim above is about the network and the clock and not about the
+  environment in general.
+
+  `cargo deny` checks that a crate is allowed at all, and `cargo vet` records
+  whether anyone has read the code. Every crate on a production edge in
+  `Cargo.lock` now has an audit written here by reading its source, with the two
+  partial reviews named as partial in the notes themselves. The remaining
+  exemptions are all dev-dependencies or build-dependencies. What
+  `cargo vet check` passing does and does not mean is recorded in
+  `supply-chain/README.md`.
 
 mili does not claim bit-reproducible output across toolchain versions. A
 different rustc version, a different `target-cpu` or a different linker will
