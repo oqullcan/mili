@@ -14,6 +14,7 @@ wycheproof_chacha20_poly1305.json   C2SP Wycheproof, converted
 xwing_draft11.json                  draft-connolly-cfrg-xwing-kem-11 Appendix C
 lamps19_composite_ed25519.json      draft-ietf-lamps-pq-composite-sigs-19 Appendix E
 argon2id_crosscheck.json           Argon2id against the reference implementation
+acvp_mlkem768.json                 NIST ACVP, ML-KEM-768 encapsulation
 ```
 
 ## What each file is for
@@ -27,6 +28,26 @@ argon2id_crosscheck.json           Argon2id against the reference implementation
 | `xwing_draft11.json` | X-Wing keygen, encapsulation and decapsulation against the draft, all three | `kem::tests::xwing_*` |
 | `lamps19_composite_ed25519.json` | the whole composite signature construction, both components, both transcripts, from the draft's own Appendix E | `signature::tests::lamps_draft_vector` |
 | `argon2id_crosscheck.json` | Argon2id against the reference C implementation, at the profile mili writes and at both bounds mili accepts | `keyfile::tests::argon2id_vectors_from_the_reference_implementation` |
+| `acvp_mlkem768.json` | ML-KEM-768 encapsulation, against NIST's own test vectors | `kem::tests::acvp_vectors_agree_with_the_key_agreement_they_were_generated_for` |
+
+## Why there is both an X-Wing and an ML-KEM file
+
+`SPEC.md` section 15 made ACVP vectors conditional: add them "if the X-Wing
+vectors prove insufficient". They proved insufficient, so they are here, and the
+reason is worth recording because it is not obvious from the file list.
+
+An X-Wing encapsulation key is an ML-KEM-768 encapsulation key followed by an
+X25519 public key, and an X-Wing ciphertext is an ML-KEM-768 ciphertext followed by
+an X25519 public key. The draft's three vectors therefore do exercise ML-KEM-768
+key generation, encapsulation and decapsulation, but only ever as a *function of an
+X-Wing seed*. There is no point in the draft file where a bare ML-KEM-768
+encapsulation key appears, so there is nothing to feed to `ml-kem`'s own
+encapsulation API, and no way to ask NIST's question of NIST's vectors.
+
+The ACVP file has exactly what the draft file lacks: an encapsulation key as an
+*input*. That makes it a different test, not a longer version of the same one, and
+`kem::tests::the_two_vector_sets_are_not_the_same_coverage` asserts the two are
+distinct rather than letting the duplication look like redundancy.
 
 ## Adding vectors
 

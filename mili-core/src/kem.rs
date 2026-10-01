@@ -204,6 +204,7 @@ mod tests {
     use super::{SealingKey, ENCAPSULATION_KEY_SIZE, SEALING_KEY_SIZE};
     use crate::Error;
     #[cfg(not(miri))]
+    #[cfg(not(miri))]
     use serde::Deserialize;
 
     #[cfg(not(miri))]
@@ -260,6 +261,155 @@ mod tests {
         let file: XWingFile = serde_json::from_str(XWING_JSON).expect("x-wing file parses");
         assert!(!file.vectors.is_empty(), "the x-wing file is empty");
         file
+    }
+
+    // NIST ACVP vectors for ML-KEM-768 itself, rather than through X-Wing.
+    //
+    // `SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
+    // proving insufficient, and this test is the answer to that condition. It is
+    // here because the answer turned out to be yes, and the reasoning is recorded
+    // in the vector file and in `tests/vectors/README.md`.
+    #[cfg(not(miri))]
+    const ACVP_JSON: &str = include_str!("../../tests/vectors/acvp_mlkem768.json");
+
+    /// The ML-KEM-768 encapsulation key type, whose size is 1184 bytes.
+    #[cfg(not(miri))]
+    type MlKemEk = ml_kem::ml_kem_768::EncapsulationKey;
+
+    /// The fixed size byte array an ML-KEM-768 encapsulation key is built from.
+    #[cfg(not(miri))]
+    type ArrayOfEk = ml_kem::array::Array<u8, ml_kem::array::sizes::U1184>;
+
+    /// The fixed size byte array an encapsulation message is built from.
+    #[cfg(not(miri))]
+    type ArrayOfM = ml_kem::array::Array<u8, ml_kem::array::sizes::U32>;
+
+    #[cfg(not(miri))]
+    #[derive(Deserialize)]
+    struct AcvpFile {
+        standard: String,
+        groups: Vec<AcvpGroup>,
+    }
+
+    #[cfg(not(miri))]
+    #[derive(Deserialize)]
+    struct AcvpGroup {
+        parameter_set: String,
+        function: String,
+        cases: Vec<AcvpCase>,
+    }
+
+    #[cfg(not(miri))]
+    #[derive(Deserialize)]
+    struct AcvpCase {
+        ek: String,
+        m: String,
+        c: String,
+        k: String,
+    }
+
+    /// NIST's vectors for ML-KEM-768 itself, driven through `ml-kem` directly
+    /// rather than through mili's [`EncapsulationKey`], because mili's wraps
+    /// X-Wing and cannot encapsulate against a bare ML-KEM key.
+    ///
+    /// `SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
+    /// proving insufficient. They are insufficient, and the reason is in the other
+    /// test in this pair.
+    #[test]
+    #[cfg(not(miri))]
+    fn acvp_vectors_agree_with_the_key_agreement_they_were_generated_for() {
+        let file: AcvpFile = serde_json::from_str(ACVP_JSON).expect("acvp file parses");
+        assert_eq!(file.standard, "FIPS 203");
+        assert!(!file.groups.is_empty(), "the acvp file is empty");
+
+        let mut checked = 0usize;
+        for group in &file.groups {
+            assert_eq!(group.parameter_set, "ML-KEM-768", "mili uses only 768");
+            assert_eq!(group.function, "encapsulation");
+
+            for (index, case) in group.cases.iter().enumerate() {
+                let ek = hex_decode(&case.ek);
+                assert_eq!(ek.len(), 1184, "group case {index}: ek is not 1184 bytes");
+                let ct = hex_decode(&case.c);
+                assert_eq!(ct.len(), 1088, "group case {index}: c is not 1088 bytes");
+                let shared = hex_decode(&case.k);
+                assert_eq!(shared.len(), 32, "group case {index}: k is not 32 bytes");
+
+                // `encapsulate_deterministic` takes the message as a fixed size
+                // array, so the length is checked in the conversion.
+                let randomness: ArrayOfM = hex_decode(&case.m)
+                    .as_slice()
+                    .try_into()
+                    .expect("group case {index}: m is not 32 bytes");
+
+                // The encapsulating key is an input here, so this is ml-kem 0.3.2
+                // being asked to encapsulate against a key NIST generated rather
+                // than one it generated, which the X-Wing vectors cannot do: there
+                // the key is always a function of the X-Wing seed.
+                // `ml-kem` takes the key as its fixed size array rather than a
+                // slice, so the length is checked here instead of by a fallible
+                // conversion inside the crate.
+                // The key type carries its size, so the 1184 byte check happens in
+                // the conversion rather than in a separate assertion.
+                let fixed: ArrayOfEk = ek
+                    .as_slice()
+                    .try_into()
+                    .expect("an ACVP encapsulation key is 1184 bytes");
+                let public = MlKemEk::new(&fixed)
+                    .expect("an ACVP encapsulation key is a valid ML-KEM-768 key");
+                let (computed, key) = public.encapsulate_deterministic(&randomness);
+
+                assert_eq!(
+                    computed.as_slice(),
+                    ct.as_slice(),
+                    "group case {index}: the ciphertext disagrees with NIST"
+                );
+                assert_eq!(
+                    key.as_slice(),
+                    shared.as_slice(),
+                    "group case {index}: the shared secret disagrees with NIST"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 20, "only {checked} ACVP cases were checked");
+    }
+
+    /// The X-Wing draft's own vectors exercise ml-kem-768 only through a function
+    /// of an X-Wing seed, so a bug in the ML-KEM key generation that X-Wing's
+    /// `expand_key` happened to mask would still pass them. This records that the
+    /// two vector sets are testing different things, which is why the ACVP file
+    /// exists rather than the draft file being called sufficient.
+    #[test]
+    fn the_two_vector_sets_are_not_the_same_coverage() {
+        let draft = vector_file();
+        let acvp: AcvpFile = serde_json::from_str(ACVP_JSON).expect("acvp file parses");
+
+        let first = &draft.vectors[0];
+        let pk = hex_decode(&first.pk);
+        let ct = hex_decode(&first.ct);
+
+        // X-Wing concatenates: an ML-KEM-768 key then an X25519 key. That layout is
+        // exactly what makes the draft vectors unable to serve as ACVP vectors:
+        // there is no ML-KEM encapsulation key anywhere in the file to feed to
+        // `encapsulate_deterministic`, and the ciphertext is a hybrid of two
+        // schemes, not something `decapsulate` on an ML-KEM key would accept.
+        assert_eq!(pk.len(), 1216);
+        assert_eq!(ct.len(), 1120);
+        assert_eq!(
+            pk.len() - 32,
+            1184,
+            "the X-Wing encapsulation key is an ML-KEM key plus an X25519 key"
+        );
+
+        let acvp_ek = hex_decode(&acvp.groups[0].cases[0].ek);
+        assert_eq!(acvp_ek.len(), 1184);
+        assert_eq!(
+            acvp_ek.len(),
+            pk.len() - 32,
+            "so the ACVP encapsulation key is exactly the X-Wing key's ML-KEM half, \
+             and neither file contains the other"
+        );
     }
 
     #[test]

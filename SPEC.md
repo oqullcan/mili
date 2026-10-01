@@ -606,7 +606,7 @@ schedule.
 | RFC 8439 Section 2.8.2 | ChaCha20-Poly1305 | 1 | 2 |
 | C2SP Wycheproof `chacha20_poly1305_test.json` | ChaCha20-Poly1305 edge and negative cases | 316, of which 256 accepted and 60 rejected | 2 |
 | `draft-connolly-cfrg-xwing-kem-11` Appendix C | X-Wing keygen, encapsulation and decapsulation | 3 | 2 |
-| NIST ACVP vectors for ML-KEM-768 | ML-KEM agreement, if the X-Wing vectors prove insufficient | - | 2 |
+| NIST ACVP vectors for ML-KEM-768 | ML-KEM encapsulation, against NIST's own vectors | 25 | 6 |
 | `draft-ietf-lamps-pq-composite-sigs-19` Appendix E | the whole composite signature construction, both components, empty and non empty context | 1 | 3 |
 | RFC 9106 test vectors | Argon2id | - | 5 |
 | proptest properties and exhaustive byte sweeps | mili formats | - | 2 to 5 |
@@ -620,6 +620,25 @@ Where a Wycheproof or ACVP file has no Rust-side runner, the vectors are
 converted once into the JSON layout under `tests/vectors/` and the runner is
 written against that file. The conversion step is committed and its source URL
 and file name are recorded in the JSON.
+
+### 15.1 Why ML-KEM-768 has its own vector file
+
+This file asked for ACVP vectors only "if the X-Wing vectors prove insufficient".
+They are insufficient, and the reason is structural rather than a matter of how
+many cases each has.
+
+An X-Wing encapsulation key is an ML-KEM-768 encapsulation key followed by an
+X25519 public key, and an X-Wing ciphertext is an ML-KEM-768 ciphertext followed
+by an X25519 public key. The draft's three vectors therefore do exercise
+ML-KEM-768 key generation, encapsulation and decapsulation, but only ever as a
+function of an X-Wing seed. No ML-KEM-768 encapsulation key appears anywhere in
+the draft file on its own, so nothing in it can be handed to `ml-kem`'s
+encapsulation API, and NIST's question cannot be asked of NIST's vectors.
+
+The ACVP file has what the draft file lacks: an encapsulation key as an input,
+paired with the ciphertext and shared secret NIST expects from it. The two files
+are therefore different tests, and `kem::tests::the_two_vector_sets_are_not_the_same_coverage`
+asserts that rather than leaving the duplication to look accidental.
 
 ## 16. Reproducible builds
 

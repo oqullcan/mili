@@ -161,8 +161,7 @@ to run in a loop. Tests
 that call ML-KEM-768, X25519, ML-DSA-65 or Ed25519 are excluded under miri, as
 are the tests that call Argon2id, one exhaustive Wycheproof sweep is ignored
 there, and the sealed box byte sweep is reduced to one position per region because
-each authenticated operation costs about ten seconds when interpreted. See
-`SPEC.md` section 15.1.
+each authenticated operation costs about ten seconds when interpreted.
 
 Excluding a test from miri is easy to forget and the symptom is a job that never
 finishes rather than a failure that names the test. `keyfile::derive_kek` panics
