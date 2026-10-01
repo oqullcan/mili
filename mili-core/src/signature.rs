@@ -51,9 +51,6 @@ pub const SIGNING_KEY_SIZE: usize = 64;
 /// Length in bytes of a composite verifying key.
 pub const VERIFYING_KEY_SIZE: usize = 1984;
 
-/// Length in bytes of a composite signature.
-pub const SIGNATURE_SIZE: usize = 3373;
-
 /// Length in bytes of the ML-DSA-65 seed inside a signing key.
 pub const ML_DSA65_SEED_SIZE: usize = 32;
 
@@ -71,6 +68,22 @@ pub const ML_DSA65_SIGNATURE_SIZE: usize = 3309;
 
 /// Length in bytes of the Ed25519 signature half.
 pub const ED25519_SIGNATURE_SIZE: usize = 64;
+
+/// Length in bytes of the two component signatures inside a composite signature.
+///
+/// Not the length of a composite signature. That is [`SIGNATURE_SIZE`], and the
+/// difference is this constant's six byte header.
+///
+/// The two are named apart because a caller who allocated `SIGNATURE_SIZE` bytes
+/// from the old name got six bytes short, and the C ABI in `mili-ffi` did exactly
+/// that until the header check caught it: `mili_sign` was handed a 3373 byte buffer
+/// for a 3379 byte signature and wrote six bytes past the end. A constant whose name
+/// is the total but whose value is a part is a defect in the constant, not in the
+/// caller that read it.
+pub const SIGNATURE_PAYLOAD_SIZE: usize = ML_DSA65_SIGNATURE_SIZE + ED25519_SIGNATURE_SIZE;
+
+/// Length in bytes of a whole composite signature, header included.
+pub const SIGNATURE_SIZE: usize = HEADER_SIZE + SIGNATURE_PAYLOAD_SIZE;
 
 /// The magic every mili file starts with.
 const MAGIC: [u8; 4] = *b"mili";
@@ -127,6 +140,21 @@ impl SigningKey {
         self.0.as_bytes()
     }
 
+    /// Copies the seed out, for storing a key or handing it to another process.
+    ///
+    /// # What this exposes
+    ///
+    /// The seed is the private key, 32 bytes for each of the two component
+    /// schemes. Public because a caller has to be able to persist a key, and
+    /// because `mili-ffi` needs to move one across the C ABI.
+    ///
+    /// [`crate::kem::SealingKey::to_bytes`] says what the caller then owes; it is the
+    /// same here.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; SIGNING_KEY_SIZE] {
+        *self.expose()
+    }
+
     /// Derives the matching verifying key.
     #[must_use]
     pub fn verifying_key(&self) -> VerifyingKey {
@@ -155,7 +183,7 @@ impl SigningKey {
         let ed25519 = ed25519_dalek::SigningKey::from_bytes(&ed25519_seed);
         let ed25519_bytes = ed25519.sign(&transcript).to_bytes();
 
-        let mut out = Vec::with_capacity(HEADER_SIZE + SIGNATURE_SIZE);
+        let mut out = Vec::with_capacity(SIGNATURE_SIZE);
         out.extend_from_slice(&MAGIC);
         out.push(FORMAT_TYPE);
         out.push(VERSION);
@@ -368,7 +396,7 @@ impl<'a> SignatureFile<'a> {
     /// Nothing here is a security check. The magic, `format_type` and `version`
     /// bytes are public, and the cryptographic check happens in `verify`.
     fn parse(file: &'a [u8]) -> Result<Self, Error> {
-        if file.len() != HEADER_SIZE + SIGNATURE_SIZE {
+        if file.len() != SIGNATURE_SIZE {
             return Err(Error::Failed);
         }
         if file[..4] != MAGIC || file[4] != FORMAT_TYPE {
@@ -390,8 +418,8 @@ impl<'a> SignatureFile<'a> {
 mod tests {
     use super::{
         transcript, ED25519_SIGNATURE_SIZE, ED25519_VERIFYING_KEY_SIZE, LABEL,
-        ML_DSA65_SIGNATURE_SIZE, ML_DSA65_VERIFYING_KEY_SIZE, OID, SIGNATURE_SIZE,
-        SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
+        ML_DSA65_SIGNATURE_SIZE, ML_DSA65_VERIFYING_KEY_SIZE, OID, SIGNATURE_PAYLOAD_SIZE,
+        SIGNATURE_SIZE, SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
     };
     #[cfg(not(miri))]
     use super::{SigningKey, HEADER_SIZE, ML_DSA65_SEED_SIZE};
@@ -460,7 +488,8 @@ mod tests {
     fn sizes_match_the_specification() {
         assert_eq!(SIGNING_KEY_SIZE, 64);
         assert_eq!(VERIFYING_KEY_SIZE, 1984);
-        assert_eq!(SIGNATURE_SIZE, 3373);
+        assert_eq!(SIGNATURE_PAYLOAD_SIZE, 3373);
+        assert_eq!(SIGNATURE_SIZE, 3379);
         assert_eq!(ML_DSA65_VERIFYING_KEY_SIZE, 1952);
         assert_eq!(ED25519_VERIFYING_KEY_SIZE, 32);
         assert_eq!(ML_DSA65_SIGNATURE_SIZE, 3309);
@@ -471,7 +500,7 @@ mod tests {
         );
         assert_eq!(
             ML_DSA65_SIGNATURE_SIZE + ED25519_SIGNATURE_SIZE,
-            SIGNATURE_SIZE
+            SIGNATURE_PAYLOAD_SIZE
         );
     }
 
@@ -527,7 +556,7 @@ mod tests {
             &[0x5Au8; 5000][..],
         ] {
             let signature = key.sign(message).expect("sign");
-            assert_eq!(signature.len(), HEADER_SIZE + SIGNATURE_SIZE);
+            assert_eq!(signature.len(), SIGNATURE_SIZE);
             verifying.verify(message, &signature).expect("verify");
         }
     }
@@ -788,8 +817,13 @@ mod tests {
         assert_eq!(file.prefix, "CompositeAlgorithmSignatures2025");
         assert_eq!(file.sizes.pk, VERIFYING_KEY_SIZE);
         assert_eq!(file.sizes.sk, SIGNING_KEY_SIZE);
-        assert_eq!(file.sizes.signature, SIGNATURE_SIZE);
-        assert_eq!(file.sizes.signature_with_context, SIGNATURE_SIZE);
+        // The draft's sizes are the two component signatures and nothing else. mili's
+        // wire size is those plus this crate's own six byte header, so this compares
+        // like with like rather than a draft quantity against a mili quantity that
+        // happened to be spelled the same way.
+        assert_eq!(file.sizes.signature, SIGNATURE_PAYLOAD_SIZE);
+        assert_eq!(file.sizes.signature_with_context, SIGNATURE_PAYLOAD_SIZE);
+        assert_eq!(SIGNATURE_SIZE, HEADER_SIZE + SIGNATURE_PAYLOAD_SIZE);
 
         let vector = &file.vector;
         assert_eq!(vector.tc_id, "id-MLDSA65-Ed25519-SHA512");

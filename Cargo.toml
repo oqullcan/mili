@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["mili-core"]
+members = ["mili-core", "mili-ffi"]
 # The fuzz targets are built by `cargo fuzz` with sanitizer flags that belong to
 # the fuzz invocation, not to the library. Keeping the crate out of the workspace
 # means a target cannot change how `mili-core` is built for `cargo test`.
@@ -32,6 +32,7 @@ hybrid-array = "=0.4.15"
 # `base64ct` remains, as argon2's own dependency, for PHC encoding that mili does
 # not call. It is a supply chain question rather than a feature question, so it
 # is left to `cargo vet` and the advisory database instead of being worked around.
+mili-core = { version = "=0.1.0", path = "mili-core" }
 argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
 
 # Argon2 touches 64 MiB three times per derivation. Unoptimised, one derivation

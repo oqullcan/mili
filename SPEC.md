@@ -656,3 +656,112 @@ Release signing is not performed by CI.
   no revocation shortcut, because there is no online key infrastructure to
   revoke against.
 
+
+## 18. The C ABI
+
+`mili-ffi` exposes mili across a C ABI. It is the only crate in this repository
+that contains `unsafe` code; `mili-core` is `#![forbid(unsafe_code)]` and stays
+that way, which is the reason the crate exists.
+
+This section is normative for the boundary's shape. The functions are declared in
+`mili-ffi/include/mili.h`, which is hand written and checked against the exported
+symbols by a test.
+
+### 18.1 Rules
+
+1. **No pointer arithmetic leaves the crate.** Every function takes a pointer and a
+   length, or a pointer to a buffer whose size the caller asked for. A caller's
+   packed array is read as slices, never walked with `pointer.add`.
+2. **Output buffers belong to the caller.** No function allocates memory the caller
+   has to free and none returns a pointer into the library. There is no `free`
+   counterpart to mismatch and nothing to use after the library is unloaded.
+3. **Every function returns an error code.** Zero is success. Null is never used to
+   report failure, so a null out-parameter is a bug in the boundary rather than a
+   state a caller handles.
+4. **Every output takes a capacity and reports its length.** A capacity that is too
+   small fails with `MILI_BUFFER_TOO_SMALL` having written nothing, and no length is
+   written on failure. Nothing here trusts the caller to have allocated what the
+   documentation says.
+5. **A panic cannot cross the boundary.** Every entry point catches an unwind and
+   returns `MILI_INTERNAL`.
+6. **Nothing is negotiated or configured.** One suite per format version. No function
+   selects an algorithm or reads the environment.
+
+Rules 4 and 6 have a stated cost. Rule 4 means a caller asks the library twice, once
+for a size and once for the result, where a fixed-size convention would have been one
+call. It is there because of what happened without it: the first version had two
+conventions, and `mili_sign` was handed a 3373 byte buffer for a 3379 byte signature
+and wrote six bytes past the end of it. Rule 6 means the boundary cannot grow a
+compatibility shim for anything, which is the same position `mili-core` takes.
+
+### 18.2 Error codes
+
+| Value | Name | Meaning |
+|-------|------|---------|
+| 0 | `MILI_OK` | success |
+| 1 | `MILI_FAILED` | every failure mili does not distinguish |
+| 2 | `MILI_UNSUPPORTED_VERSION` | the data names a format version this build does not implement |
+| 3 | `MILI_INTERNAL` | a caught panic, or an invariant that did not hold |
+| 4 | `MILI_IO` | an I/O error from a caller-supplied stream |
+| 5 | `MILI_BUFFER_TOO_SMALL` | the caller's output buffer was too small |
+
+Only 1 is the uniform failure. 2, 3 and 4 are statements about the caller's data,
+about the library, or about its own I/O rather than about secrecy. 5 is a statement
+about the caller's own allocation.
+
+A caller cannot distinguish a wrong key from a corrupted file from a wrong password,
+and the boundary does not add a way to. See `THREAT_MODEL.md` section 2.12.
+
+### 18.3 Sizes
+
+Every size is reported by a `*_size()` function rather than written into the header,
+so that a caller compiled against one version of the header and linked against
+another asks the linked library rather than trusting a constant it baked in.
+
+Two mili constants are named apart because the boundary got one of them wrong:
+
+- `SIGNATURE_PAYLOAD_SIZE` is 3373, the two component signatures and nothing else.
+- `SIGNATURE_SIZE` is 3379, the same plus mili's six byte signature header.
+
+The first version of this boundary reported the payload size where a caller would
+allocate a signature buffer, and wrote six bytes past the end. The rename is in
+`mili-core` and the note on both constants says why.
+
+### 18.4 What the boundary cannot do
+
+It cannot check that a non-null pointer covers the length a caller claims. That is
+inherent to a C boundary: it refuses a null pointer and trusts the rest. Every caller
+in this repository is held to the rule that a non-zero length means a buffer that
+long.
+
+It does not clear the caller's memory. A key written into a Go slice will be copied
+by the garbage collector and will not be zeroed. `DISCLAIMER.md` records this.
+
+It does not stream. `mili_seal_stream` and `mili_open_stream` take a whole message,
+because a reader or writer crossing the boundary would be a second unsafe surface
+with no format benefit. A Go program with a file larger than memory should write
+chunks through these functions, or link the library itself and drive the format.
+
+## 19. The Go binding
+
+`bindings/go` is a cgo layer over the C ABI. It adds no policy: no retry, no
+padding, no key derivation of another kind, no option that section 18 or an earlier
+section does not define.
+
+The three key kinds are three distinct Go types, `SealingKey`, `SigningKey` and
+`SymmetricKey`. That is not decoration. A sealing key and a symmetric key are both
+32 bytes, so anything that inferred the kind from the length would read a symmetric
+key as a sealing key and hand back bytes the caller would then encrypt with. Naming
+the types makes that a compile error, which is the same rule `mili-core` applies and
+the same rule its README states.
+
+`KeyFile` and `Backup` are byte strings with methods. A key file opens through
+`UnwrapSealing` or `UnwrapSigning`, and each states which kind it expects to the
+library, so opening a signing key file as a sealing key is refused rather than
+returning 64 bytes into a 32 byte buffer or 32 bytes into a 64 byte one.
+
+A backup is built through `BackupBuilder`, whose `Add` methods are typed. Two keys
+with the same identifier are refused, as section 8 requires.
+
+The binding has no dependencies beyond the C library it links. A security library
+whose binding pulls in a module graph has a supply chain the user did not choose.

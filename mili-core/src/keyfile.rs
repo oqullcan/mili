@@ -260,6 +260,23 @@ impl KeyFile {
         Ok((header.payload_type, SecretBytes::from_bytes(fixed)))
     }
 
+    /// Reports which kind of key this file holds, without a password.
+    ///
+    /// Returns [`PAYLOAD_SEALING`], [`PAYLOAD_SIGNING`] or [`PAYLOAD_SYMMETRIC`].
+    /// This authenticates nothing: any bytes have a payload type at a fixed offset,
+    /// so the answer is a property of the header rather than of the contents. It is
+    /// for a caller deciding which of its keys to try, and for the C ABI, which has
+    /// no other way to ask.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Failed`] if the bytes are too short to hold a key file at all.
+    /// Everything else about the file, including whether it authenticates, is
+    /// decided on open.
+    pub fn payload_type(&self) -> Result<u8, Error> {
+        Header::parse(&self.0).map(|header| header.payload_type)
+    }
+
     /// Unwraps this file, which must hold a sealing key.
     ///
     /// # Errors

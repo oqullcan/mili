@@ -185,6 +185,46 @@ jobs:
             -max_total_time=60 \
             -print_final_stats=1
 
+  ffi:
+    name: mili-ffi and the Go binding
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      # A full version, not a range. The binding uses cgo, and cgo has changed
+      # between minor releases before.
+      - name: Install Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5
+        with:
+          go-version: "1.24.6"
+
+      - name: Build the library
+        run: cargo build --locked --release -p mili-ffi
+
+      # The library and the header are two artifacts that have to agree, and the test
+      # that checks it needs the release build because that is what cgo links.
+      - name: Test the boundary
+        run: cargo test --locked -p mili-ffi
+
+      - name: Vet the binding
+        working-directory: bindings/go
+        run: go vet ./...
+
+      - name: Test the binding
+        working-directory: bindings/go
+        run: go test ./...
+        env:
+          # The binding links libmili_ffi.so from the release build rather than
+          # installing it anywhere, so the loader has to be told where it is.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+
   audit:
     name: advisory audit
     runs-on: ubuntu-latest

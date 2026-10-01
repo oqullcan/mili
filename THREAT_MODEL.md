@@ -332,14 +332,38 @@ What mili does not do is rate limit opens. A caller that opens a hundred
 hostile files in a loop pays for a hundred bounded derivations. Bounding each
 derivation is not bounding the number of them.
 
-### 5.8 Key distribution
+### 5.8 The C ABI
+
+`mili-ffi` is the only crate here with `unsafe` code. Its rules are in `SPEC.md`
+section 18.1 and its exposure is bounded rather than closed:
+
+- The boundary cannot check that a non-null pointer covers the length the caller
+  claims. It refuses null and trusts the rest. A caller who lies about a length gets
+  undefined behaviour, as with any C interface.
+- The boundary does not stream. A reader or writer crossing it would be a second
+  unsafe surface with no format benefit, so a program with a file larger than memory
+  writes chunks through the buffer interface instead.
+- The boundary does not clear the caller's memory.
+- A caught panic becomes `MILI_INTERNAL`. mili-core claims no panic is reachable;
+  the boundary assumes that claim could be wrong, and both hold independently.
+
+The Go binding adds no policy of its own and no place where a caller can choose a
+weaker option, because it has no options. Its types are named so that the one
+mistake a length could cause, using a symmetric key as a sealing seed, is a compile
+error rather than a runtime surprise.
+
+What the binding does add is the ordinary risk of a second language: Go's garbage
+collector copies key slices, a `String` conversion or a logging library may capture
+them, and nothing zeroes them. See `DISCLAIMER.md`.
+
+### 5.9 Key distribution
 
 mili does not authenticate public keys. Key authenticity is the caller's
 problem: a binding document, a fingerprint compared over another channel, or a
 certificate. An adversary who substitutes the verifying key can substitute
 signatures, and mili will verify them.
 
-### 5.9 Multiple recipients
+### 5.10 Multiple recipients
 
 mili-v1 seals to exactly one recipient. There is no recipient list, no
 multi-recipient header and no format for it.

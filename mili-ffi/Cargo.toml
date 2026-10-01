@@ -1,0 +1,29 @@
+[package]
+name = "mili-ffi"
+description = "The C ABI for mili. The only crate here that contains unsafe code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# `cdylib` is what a Go program loads; `staticlib` is what a C program links, and
+# what `cgo` builds against when CGO_LDFLAGS names an archive rather than a shared
+# object. `rlib` is what lets the tests in this crate call the entry points through
+# the same signatures the C header declares.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+mili-core.workspace = true
+zeroize.workspace = true
+
+[lints.rust]
+missing_docs = "deny"
+# An `unsafe fn` gets a safety comment even when it has no `unsafe` block of its own,
+# because it is `unsafe` precisely so that its caller's obligations are visible.
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+arithmetic_side_effects = "deny"
+missing_safety_doc = "deny"

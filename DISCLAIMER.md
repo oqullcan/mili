@@ -91,6 +91,19 @@ mili does not defend against a caller supplying enough input to exhaust memory
 or CPU time. Bounded operations have explicit bounds; unbounded ones are named
 as unbounded.
 
+### Language bindings
+
+The Go binding in `bindings/go` is a layer over the C ABI and adds no policy of its
+own. What it does add is Go's memory model. mili zeroizes the buffers it allocates
+inside Rust; a key that has crossed into a Go slice will be copied by the garbage
+collector, may be captured by a `String` conversion or a structured logging call, and
+will not be zeroed. Zeroing a Go slice is the caller's to arrange, with whatever
+means the caller's own threat model implies, and Go's runtime does not promise that
+a slice stays put if it does.
+
+The binding also cannot check a caller's own bounds at the C level. It refuses a
+null pointer and trusts every other length, as `SPEC.md` section 18.4 records.
+
 ## 5. Words mili does not use
 
 mili is not described as secure, unbreakable, military grade, bank grade or
@@ -114,3 +127,9 @@ and against what, is not something this repository can claim.
 - Streaming decryption releases plaintext before the whole message is
   authenticated. Read `THREAT_MODEL.md` section 3.2 before using `StreamReader`
   on anything where a partial result would be acted on.
+- A key at rest belongs in a key file or a backup container. A key handed to
+  `ToBytes`, `to_bytes` or a Go `SealingKey` is in ordinary memory that nothing
+  zeroizes once it has crossed the boundary.
+- mili has no public operation that consumes a symmetric key. No format in
+  `SPEC.md` takes one. A `SymmetricKey` can be generated, stored in a backup and
+  read back, and there is currently nothing in this library to use it with.

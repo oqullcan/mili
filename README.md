@@ -31,8 +31,8 @@ above.
    wrote, audited and published.
 2. There is no configuration. If it is not in `SPEC.md`, it is not selectable.
 3. The API makes misuse hard or impossible at compile time. Signing keys and
-   encryption keys are distinct types that do not convert into each other. The
-   caller never sees a nonce or a counter.
+   encryption keys are distinct types that do not convert into each other, in
+   Rust and in Go. The caller never sees a nonce or a counter.
 4. Failure is closed and uniform. Every authentication, key agreement and
    cryptographic parse failure returns `Error::Failed` with a fixed message and
    no detail.
@@ -41,10 +41,14 @@ above.
 ## Layout
 
 ```
-mili-core/           the library
+mili-core/           the library, #![forbid(unsafe_code)]
   src/               error, secret, rng, kdf, kem, aead, seal, signature, stream,
                      format, keyfile, backup
   tests/             property tests against the public API
+mili-ffi/            the C ABI, the only crate here with unsafe code
+  include/mili.h     the header, hand written and test checked
+  tests/             the boundary's own tests
+bindings/go/         the Go binding, cgo over that ABI
 fuzz/                cargo-fuzz targets, one per parser, outside the workspace
 tests/vectors/       known answer test vectors, read at compile time
 docs/                created when a document does not belong in the root
@@ -59,8 +63,6 @@ rust-toolchain.toml  pinned toolchain
 sanitizer flags that belong to the fuzz invocation rather than to the library.
 See `fuzz/README.md`.
 
-`mili-ffi` is added in its phase.
-
 ## Implemented so far
 
 | Phase | Status |
@@ -71,7 +73,7 @@ See `fuzz/README.md`.
 | 4 streaming file encryption | done |
 | 5 password-wrapped key files, backup container | done |
 | 6 fuzz targets, miri, hardening | done |
-| 7 `mili-ffi` and the Go binding | not started |
+| 7 `mili-ffi` and the Go binding | done |
 
 ## Checks
 
@@ -86,7 +88,12 @@ cargo audit
 cd fuzz
 cargo deny check
 cargo +nightly fuzz build
-cargo +nightly fuzz run open_backup corpus/open_backup
+cargo +nightly fuzz run open_backup regressions/open_backup
+
+cd ../..
+cargo build --locked --release -p mili-ffi
+cd bindings/go
+LD_LIBRARY_PATH=../../target/release go test ./...
 ```
 
 The fuzz targets are a separate job, one target per matrix entry. It replays the
@@ -94,7 +101,29 @@ committed corpus, which is what catches a reintroduced defect, and then fuzzes f
 one minute as a smoke test that the target still reaches its parser. A campaign
 worth the name is run by a person; see `fuzz/README.md`.
 
+The Go tests need `LD_LIBRARY_PATH` pointed at `target/release`, because the binding
+links `libmili_ffi.so` from there rather than installing it anywhere. A Go toolchain
+is not pinned by this repository; CI uses `actions/setup-go` with a full version.
+
 `cargo-vet` is not configured yet. See the phase 1 notes.
+
+## The C ABI and the Go binding
+
+`mili-ffi` is the only crate here that contains `unsafe`. `mili-core` is
+`#![forbid(unsafe_code)]` and stays that way, which is the reason the crate exists.
+Its rules are in `SPEC.md` section 18.1: no pointer arithmetic leaves the crate, output
+buffers belong to the caller, every function returns a code, every output takes a
+capacity and reports its length, and a panic cannot cross the boundary.
+
+`mili-ffi/include/mili.h` is hand written rather than generated, and checked against
+the exported symbols by a test, because a generated header is a build artefact whose
+generator, configuration and toolchain all become part of what a caller compiles
+against.
+
+`bindings/go` is a cgo layer over that ABI with no dependencies and no policy of its
+own. The three key kinds are three distinct Go types, which is what stops a symmetric
+key from being read as a sealing seed: both are 32 bytes, and a length would not tell
+them apart.
 
 ## Cost of the checks
 
@@ -111,6 +140,9 @@ derivation per tested byte, and the suite takes over ten minutes instead of four
 The profile override changes how the dependency is compiled, not what it
 computes, so the cross implementation vectors in `tests/vectors/` still pin the
 output.
+
+The Go tests run in about eight seconds, almost all of it Argon2 in the key file
+and backup cases.
 
 For the same reason the exhaustive tamper sweeps do not each run a derivation.
 The byte sweep lives in the crate's unit tests at the parse and AEAD layers,

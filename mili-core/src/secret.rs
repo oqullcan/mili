@@ -108,10 +108,16 @@ pub struct SymmetricKey(SecretBytes<SYMMETRIC_KEY_SIZE>);
 impl SymmetricKey {
     /// Wraps an existing 32 byte key.
     ///
-    /// Crate-private, for reading a key back out of a key file. The public way
-    /// to obtain a symmetric key is [`SymmetricKey::generate`], and a caller
-    /// that has key bytes from elsewhere has a problem mili does not solve.
-    pub(crate) fn from_bytes(bytes: [u8; SYMMETRIC_KEY_SIZE]) -> Self {
+    /// The public way to obtain a *new* symmetric key is [`SymmetricKey::generate`].
+    /// This is the way to take one that already exists: read back out of a key file
+    /// or a backup, read out of another process, or unwrapped from an envelope by
+    /// a caller that did its own key management.
+    ///
+    /// Wrapping bytes does not check them. A key that was not 256 bit random is a
+    /// key mili cannot rescue, and [`SymmetricKey::generate`] is the only thing
+    /// here that draws randomness.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; SYMMETRIC_KEY_SIZE]) -> Self {
         Self(SecretBytes::from_bytes(bytes))
     }
 
@@ -121,15 +127,29 @@ impl SymmetricKey {
     /// out of a backup, and for the FFI boundary. The public surface of a
     /// symmetric key is deliberately this narrow.
     ///
-    /// [`crate::backup::Backup::open`] hands a `StoredKey::Symmetric` to a
-    /// caller, and a caller cannot yet do anything public with it: there is no
-    /// public operation that consumes a symmetric key. That is a statement about
-    /// this crate's current surface, not a claim that a restored key is useless,
-    /// and it is why a restored symmetric key is not dropped here with a warning.
-    /// Whoever holds the backup has the key; whether they can use it is the
-    /// subject of whichever phase adds the operation that takes one.
     pub(crate) fn expose(&self) -> &[u8; SYMMETRIC_KEY_SIZE] {
         self.0.as_bytes()
+    }
+
+    /// Copies the key out, for storing it or handing it to another process.
+    ///
+    /// # What this exposes
+    ///
+    /// The key itself. Public because a caller has to be able to persist it, and
+    /// because `mili-ffi` needs to move one across the C ABI. With `from_bytes`
+    /// public, a symmetric key is now a value a caller can hold, round trip and
+    /// store, which is what makes it usable outside this crate at all.
+    ///
+    /// There is still no public operation that *consumes* a symmetric key: no
+    /// format in `SPEC.md` takes one, because mili's formats derive their own keys
+    /// from a seed or a password. A caller holding a symmetric key today has it
+    /// for their own use, and the honest statement is that this crate does not
+    /// yet hand them anything to use it with.
+    ///
+    /// [`crate::kem::SealingKey::to_bytes`] says what the caller then owes.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; SYMMETRIC_KEY_SIZE] {
+        *self.expose()
     }
 
     /// Draws a new key from the operating system CSPRNG.

@@ -386,6 +386,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mili-ffi"
+version = "0.1.0"
+dependencies = [
+ "mili-core",
+ "zeroize",
+]
+
+[[package]]
 name = "ml-dsa"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

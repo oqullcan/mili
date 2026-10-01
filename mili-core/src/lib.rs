@@ -132,5 +132,6 @@ pub use crate::kem::{EncapsulationKey, SealingKey, ENCAPSULATION_KEY_SIZE, SEALI
 pub use crate::seal::{open, seal, SEALED_BOX_OVERHEAD};
 pub use crate::secret::{SymmetricKey, SYMMETRIC_KEY_SIZE};
 pub use crate::signature::{
-    SigningKey, VerifyingKey, SIGNATURE_SIZE, SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
+    SigningKey, VerifyingKey, SIGNATURE_PAYLOAD_SIZE, SIGNATURE_SIZE, SIGNING_KEY_SIZE,
+    VERIFYING_KEY_SIZE,
 };

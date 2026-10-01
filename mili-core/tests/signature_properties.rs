@@ -29,7 +29,7 @@ proptest! {
     fn round_trip(message in prop::collection::vec(any::<u8>(), 0..1024)) {
         let key = key();
         let signature = key.sign(&message)?;
-        prop_assert_eq!(signature.len(), 6 + SIGNATURE_SIZE);
+        prop_assert_eq!(signature.len(), SIGNATURE_SIZE);
         key.verifying_key().verify(&message, &signature)?;
     }
 

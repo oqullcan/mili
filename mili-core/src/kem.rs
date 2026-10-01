@@ -66,11 +66,29 @@ impl SealingKey {
 
     /// Borrows the seed.
     ///
-    /// The only way key bytes leave this type. Crate-private until a phase needs
-    /// it for a key file or the FFI boundary.
-    #[allow(dead_code)]
+    /// Crate-private, for wrapping the key in a key file and for the FFI boundary.
     pub(crate) fn expose(&self) -> &[u8; SEALING_KEY_SIZE] {
         self.0.as_bytes()
+    }
+
+    /// Copies the seed out, for storing a key or handing it to another process.
+    ///
+    /// # What this exposes
+    ///
+    /// The seed is the private key. This method is public because a caller has to
+    /// be able to persist a key somewhere other than memory, and because
+    /// `mili-ffi` needs to move one across the C ABI; there is no way to do either
+    /// without it. Hiding it would not hide the key, it would only make persisting
+    /// one awkward.
+    ///
+    /// What the caller then owes: the bytes are in ordinary memory that Go's
+    /// garbage collector will copy, that a `String` or a log line might pick up,
+    /// and that nothing will zero. Use a key file of `SPEC.md` section 7 or a
+    /// backup of section 8 for a key at rest, and treat a copy handed to a caller
+    /// as the caller's to clear. `DISCLAIMER.md` says what mili does not clear.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; SEALING_KEY_SIZE] {
+        *self.expose()
     }
 
     /// Derives the matching public key.
