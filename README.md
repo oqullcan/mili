@@ -51,11 +51,11 @@ mili-ffi/            the C ABI, the only crate here with unsafe code
 bindings/go/         the Go binding, cgo over that ABI
 fuzz/                cargo-fuzz targets, one per parser, outside the workspace
 tests/vectors/       known answer test vectors, read at compile time
-docs/                created when a document does not belong in the root
 .github/workflows/   CI, third-party actions pinned by commit SHA
 Cargo.lock           committed
-deny.toml            dependency policy
+deny.toml            dependency policy: licences, features, duplicates, advisories
 audit.toml           advisory policy
+supply-chain/        cargo-vet configuration and audit notes
 rust-toolchain.toml  pinned toolchain
 ```
 
@@ -84,6 +84,7 @@ cargo test --locked --workspace
 cargo +nightly miri test --locked -p mili-core
 cargo deny check
 cargo audit
+cargo vet check
 
 cd fuzz
 cargo deny check
@@ -105,7 +106,12 @@ The Go tests need `LD_LIBRARY_PATH` pointed at `target/release`, because the bin
 links `libmili_ffi.so` from there rather than installing it anywhere. A Go toolchain
 is not pinned by this repository; CI uses `actions/setup-go` with a full version.
 
-`cargo-vet` is not configured yet. See the phase 1 notes.
+`cargo vet check` passing does not mean the dependency tree is audited. It means
+every crate in `Cargo.lock` is either audited or exempted, and 76 of the 96 are
+exempted, which records that nobody has looked rather than that they are fine.
+Eleven crates were read and audited; `supply-chain/README.md` names them, and also
+names the ones that matter most and are **not** among them: `argon2`, `ml-kem`,
+`ml-dsa`, `sha2`, `sha3`, `chacha20poly1305` and `ed25519-dalek`.
 
 ## The C ABI and the Go binding
 

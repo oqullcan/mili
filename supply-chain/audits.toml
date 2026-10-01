@@ -1,0 +1,334 @@
+
+# cargo-vet audits file
+
+[[audits.cmov]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.5.4"
+notes = """
+1702 lines in seven files, with 34 unsafe blocks, all in the backends. This is the
+constant time conditional move that `ctutils` is built on, and it was read
+because a constant time primitive that is not constant time is worse than an
+obviously non-constant one, because it is trusted to be one.
+
+Two things are recorded here, one of which is a gap.
+
+What was checked:
+
+- The x86 and aarch64 backends use `asm!` with `options(pure, nomem, nostack)`.
+  The macro form is fixed: `test {0}, {0}` followed by the CMOVcc instruction, all
+  operands in registers, no memory operands. A CMOV with no memory operand is the
+  property that matters, because a conditional load is what leaks through a cache
+  or a page timing on several microarchitectures, and there is none here.
+
+- The soft backend is `(a & !mask) | (b & mask)`, branchless by construction. Every
+  `cmovnz` and `cmovz` is a mask operation on a whole word, so the instruction
+  sequence is data independent even though the compiler is free to choose it.
+
+- The slice and integer impls build views with `cast_slice` and
+  `cast_slice_mut` under `assert_size_and_alignment_eq!`, and reconstruct
+  `NonZero` from a value that came out of `NonZero::get` with a SAFETY comment
+  saying so. The `Ordering` macro uses `&raw const` rather than a reference to a
+  temporary, which is the 2024 edition idiom for the same cast `subtle` uses.
+
+The gap: line 8 of `src/lib.rs` is
+`#![allow(clippy::undocumented_unsafe_blocks)] // TODO(tarcieri): document all
+unsafe blocks`. Every block here carries an inline SAFETY comment, which is what
+the criterion asks for and what was checked above, but the crate has explicitly
+deferred the systematic pass. This audit is therefore the documentation that
+upstream owes itself, written here rather than upstream.
+
+No build script, no filesystem, no network, no process spawning.
+"""
+
+[[audits.ctutils]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.4.2"
+notes = """
+3425 lines across twelve files, `#![forbid(unsafe_code)]` with the comment that
+unsafe belongs in `cmov`, and it does. There is nothing to review here: the
+crate's whole content is the `Choice`, `CtOption` and the `CtEq`/`CtSelect`/
+`CtGt`/`CtLt`/`CtNeg` traits, all implemented on top of `cmov`.
+
+The one thing worth recording is why it is a separate crate from `cmov` at all:
+`Choice::unwrap_u8` and the boolean conversions are what a caller turns a
+constant time comparison into, and getting that conversion wrong reintroduces the
+branch. Reading the traits confirms the conversions go through `cmov` rather than
+through an `if`.
+
+No build script, no ambient capabilities. Dependency is `cmov`, reviewed
+separately.
+"""
+
+[[audits.getrandom]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.4.3"
+notes = """
+2582 lines with 117 unsafe blocks, so this is the crate in the tree that needed
+reading most and where a surprise would matter most: it is the only path by which
+key material enters mili. `SPEC.md` section 16 says no build script in the tree
+reads the network or the clock, and this is the crate that would be the way to do
+it.
+
+The build script is eleven lines and does not read anything. It reads
+`CARGO_CFG_SANITIZE` and, if that contains "memory", sets `cfg(getrandom_msan)`
+so the crate can unpoison its output under MemorySanitizer. That is the whole of
+it. It reads an environment variable cargo sets, not one a caller controls at run
+time, and it cannot cause code to run.
+
+Which backend a build gets is decided by `cfg`, in this order: an explicit
+`getrandom_backend` cfg, then `target_os = "linux", target_env = ""`, and then a
+list of other targets. On this machine's target, Linux with a glibc or musl
+environment, the second branch selects `linux_raw`, which issues the `getrandom`
+syscall through `asm!` and nothing else. On a Linux build with no environment,
+the later branch selects `linux_android_with_fallback`, which falls back to
+`/dev/urandom` rather than `/dev/random`. Both are acceptable sources; the crate
+documents why and does not fall back to `/dev/random`.
+
+`fill_inner` on the `linux_raw` path loops and continues on `EINTR`, splits the
+returned length with `split_at_mut_checked` and unpoisons what was written, so a
+short read from the kernel is handled rather than mistaken for an error. A
+return of zero is an error rather than a silent success, which matters: returning
+success without writing would hand mili zero bytes as if they were random.
+
+The unsafe is `asm!` syscall stubs with `options(nostack, preserves_flags)`, plus
+one `extern "C"` declaration for `__msan_unpoison` that is only compiled under
+MemorySanitizer, and the `slice_assume_init_mut` after the buffer is filled. The
+`MaybeUninit` handling is the kind of thing to be careful about and it is done
+with the `split_at_mut_checked` and `ok_or` pattern rather than a raw pointer
+arithmetic, and the SAFETY comment on the final conversion says the buffer was
+fully initialised by `fill_inner` returning `Ok`.
+
+No network. No clock. No filesystem except the `/dev/urandom` fallback on the
+targets that select it. Dependencies are `cfg-if`, `libc`, `r-efi` and `wasi` on
+the targets that use them.
+
+This audit covers the 0.3.x line only in the sense that 0.3.4 is exempted as a
+test-only dependency; nothing in mili's shipped code reaches it.
+"""
+
+[[audits.hkdf]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.13.0"
+notes = """
+258 lines in three files, no unsafe at all, no build script, no ambient
+capabilities.
+
+`GenericHkdf::from_prk` rejects a PRK shorter than the hash output, which is
+RFC 5869 section 2.3's "at least HashLen octets" requirement, so a caller cannot
+build an HKDF from a truncated PRK.
+
+`expand_multi_info` rejects `okm.len() > chunk_len * 255` before writing
+anything, which is the L counter overflow check from RFC 5869 section 2.3 and is
+the check that keeps the counter from wrapping to a repeated value. The counter
+byte is built as `u8::try_from(block_n).expect(...) + 1`; the length check above
+caps `block_n` at 254, so the `try_from` cannot fail and the addition cannot
+overflow a `u8`. That is a panic the code argues cannot happen, which is
+acceptable, and it is not reachable from an untrusted output length.
+
+The one `expect` in `finalize` is on a PRK the function itself just produced at
+the hash output size. Dependencies are `hmac` and `digest`.
+"""
+
+[[audits.kem]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+notes = """
+251 lines, one file, `#![forbid(unsafe_code)]`, no build script, no ambient
+capabilities. It is the KEM trait crate: `Encapsulate`, `Decapsulate`,
+`Generate`, `KeyInit`, and the `Key<CiphertextSize>` newtype.
+
+The trait definitions carry no logic, and the only default methods are
+`encapsulate` and `generate_keypair`, which delegate to the RNG-taking variants.
+There is no randomness of its own: `CryptoRng` is re-exported from
+`crypto-common`'s `rand_core` re-export, so this crate cannot be the thing that
+decides where entropy comes from.
+
+Dependency is `crypto-common` with the `rand_core` feature, reviewed separately.
+"""
+
+[[audits.shake]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = """
+206 lines, one file, `#![forbid(unsafe_code)]`, no build script, no ambient
+capabilities. It wraps `keccak` and `sponge-cursor` into the SHAKE3 extendable
+output interface and delegates the permutation to `keccak`.
+
+The only logic is the finalize-and-squeeze loop, which reads the requested number
+of bytes out of the sponge reader. Nothing is buffered locally, so there is no
+state to be misused. The XOF reader is `sponge-cursor`'s, reviewed separately,
+which is where the unsafe code in this subtree actually lives.
+
+Dependencies are `digest`, `keccak` and `sponge-cursor`.
+"""
+
+[[audits.sponge-cursor]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = """
+390 lines in two files, `#![forbid(unsafe_code)]` on the module except for five
+deliberate blocks, all of which were read.
+
+Two are `core::hint::unreachable_unchecked` behind a `pos < RATE` check that is
+already proven by the type, with the SAFETY comment saying so. `set_pos` asserts
+`new_pos < RATE` before assigning, and `pos()` re-checks before the hint, so the
+hint is unreachable on both the safe and the release path.
+
+Three cast `&mut [u64; N]` to `&mut [u8; RATE]` in `absorb_partial` and
+`absorb_final`. The size precondition is a `const` block:
+`assert!(size_of::<[u8; RATE]>() <= size_of::<[u64; N]>())`, so it is checked at
+compile time rather than at run time, and the alignment requirement of `[u64]`
+is stricter than `[u8; RATE]`'s. Every call site passes `pos` from `self.pos()`,
+which is bounded by `RATE`, and passes `data` already split so that
+`offset + data.len() <= RATE`; the `&mut sub_state[offset..][..data.len()]` on
+the next line bounds-checks both, so a violation would be a panic rather than an
+out of bounds access. The `cfg!(target_endian = "big")` branch avoids the cast
+entirely.
+
+No build script, no filesystem, no network, no process spawning. The only
+capability is the zeroize feature, which is a drop implementation. Dependencies are
+`zeroize` (optional) and `digest`/`keccak` for tests.
+"""
+
+[[audits.subtle]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "2.6.1"
+notes = """
+1008 lines, one file. This is the crate mili's own secret types use for their
+constant time `PartialEq`, so it was read in full.
+
+Two unsafe blocks:
+
+- `black_box` is `core::ptr::read_volatile` behind `#[inline(never)]`, with the
+  SAFETY comment listing the three things that make it sound: the reference is
+  to an owned `Copy` value, so it is live and aligned, and the read is of the
+  value's own type. The crate documents at length that this is a mitigation for
+  optimisers eliding a comparison, and that Rust's `volatile` is not a stable
+  guarantee, which is an honest statement rather than an overclaim.
+
+- `ConditionallySelectable for cmp::Ordering` casts an `i8` back to `Ordering`.
+  This is sound only if `Ordering` is `#[repr(i8)]`, which it is, and only if the
+  `i8` came from an `Ordering`, which it did: `a` and `b` were `Ordering` values
+  cast to `i8` on the line above and passed through `i8::conditional_select`,
+  which selects between them. So the three inhabiting values are preserved. The
+  SAFETY comment says exactly this.
+
+The comparison itself is the part worth checking. `ConstantTimeEq for [T]`
+short-circuits on slice *lengths* and not on contents, which leaks only the
+length, and then accumulates with `x &= ai.ct_eq(bi).unwrap_u8()` over every
+element rather than returning on the first difference. That is the shape a
+constant time comparison has to have, and it is what mili relies on when it
+compares a key or a tag with `==`.
+
+No build script, no filesystem, no network, no process spawning, and no
+dependencies at all.
+"""
+
+[[audits.universal-hash]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.6.1"
+notes = """
+157 lines, one file, `#![forbid(unsafe_code)]`, so there is nothing unsafe to
+review. No build script, no filesystem, no network, no process spawning.
+
+The crate is a trait definition plus a default method that chunks a block slice
+and hands it to a backend. `update_padded` zero-fills a trailing partial block
+before absorbing it, which is the documented behaviour for the AEAD modes that
+use a universal hash over a padded tail. `verify` compares with `ct_eq` from
+`ctutils`, so the comparison is constant time; that is the one security-relevant
+line in the crate and it is correct.
+
+Dependencies are `crypto-common` and `ctutils`, both reviewed separately.
+"""
+
+[[audits.x-wing]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+notes = """
+383 lines, one file, no unsafe at all, no build script, no filesystem, no
+network, no process spawning. This is the KEM mili's sealed box depends on, so it
+was read in full.
+
+The three functions that matter were checked against the draft:
+
+- `expand_key` runs SHAKE-256 over the 32 byte seed and reads 64 bytes out: 32
+  for the ML-KEM-768 seed and 32 for the X25519 static secret. The reader
+  `read_from` copies exactly N bytes per call and zero-initialises the
+  destination, so there is no read past the XOF output.
+- `combiner` hashes `ss_m || ss_x || ct_x || pk_x || X_WING_LABEL` with SHA3-256
+  where the label is the six bytes backslash-dot-slash-slash-caret-slash. Binding both public keys and the
+  ciphertext into the combiner output is what stops a shared secret being moved
+  between contexts, and it is present.
+- `decapsulate` calls `sk_m.decapsulate` and then `sk_x.diffie_hellman`, and
+  passes both shared secrets plus `ct.ct_x` and `pk_x` to the same combiner. So
+  the X25519 half uses implicit rejection: a malformed `ct_x` produces a
+  different `ss_x`, a different hash, and the AEAD rejects it. Decapsulation
+  returns a value rather than an error, which is the draft's design, and it is
+  why mili has no KEM-level error to distinguish.
+
+`encapsulate_deterministic` is the one function that takes caller-supplied
+randomness, and it is marked `#[doc(hidden)]`, gated behind a `hazmat` feature,
+and carries a warning about catastrophic failure if the bytes are not uniform.
+mili does not call it; it uses `encapsulate_with_rng`, which draws 64 bytes from
+the `CryptoRng` it is handed and zeroes them under the `zeroize` feature.
+
+Dependencies are `kem`, `ml-kem`, `sha3`, `shake`, `x25519-dalek` and
+optionally `getrandom` and `zeroize`.
+"""
+
+[[audits.zeroize]]
+who = "mili maintainers"
+criteria = "safe-to-deploy"
+version = "1.9.0"
+notes = """
+1061 lines in four files, with 18 unsafe blocks. mili depends on this for every
+secret type it has, and for clearing the Argon2 working memory, so it was read
+rather than trusted for being small and famous.
+
+What the unsafe does, and why each is sound:
+
+- `optimization_barrier` is the one that matters. It is an empty `asm!` with an
+  input operand and `options(readonly, preserves_flags, nostack)`, whose whole
+  purpose is to tell the compiler that a value has been read so it cannot elide
+  the zeroing that follows. The pointer comes from `core::ptr::from_ref` on a `&T`
+  the caller owns, cast to `()` because an empty asm cannot take an arbitrary type.
+  On a target outside the listed architectures, or under miri, it falls back to
+  `core::hint::black_box` plus a `#[inline(never)]` `read_volatile`. The
+  fallback is the honest version of the same barrier, not a stub.
+
+- `Zeroize for Option` does a `volatile_set` over `size_of::<Self>()` bytes to
+  clear the space a moved-out value left behind, then `write_volatile(self, None)`
+  because `Option<Z>` is not `Copy`. The SAFETY comments cover alignment (`u8` has
+  alignment 1, so the cast to `*mut u8` is sound) and the fact that `take()` has
+  already dropped what needed dropping. This is the impl mili uses in
+  `SecretBytes`'s `Drop`.
+
+- The aarch64 path uses `volatile_write(self, unsafe { core::mem::zeroed() })`.
+  `mem::zeroed` on an integer is sound, and the write is volatile so the
+  optimisation barrier is not needed on that target.
+
+A gap worth recording: line 8 is
+`#![allow(clippy::undocumented_unsafe_blocks, reason = "TODO")]`. The blocks do
+carry SAFETY comments, and they were read against the reasoning above, but the
+crate has deferred its own systematic pass in the same way `cmov` has.
+
+The crate is candid about its limits in its own documentation, and that candour is
+the reason this audit is short: it states that erasure of a moved-from `Option` is
+fragile if the payload contains `MaybeUninit` or `union` data, and that it does not
+recurse into `Box` or `Vec`. mili does not ask it to: every secret type here is a
+fixed size array or a `Copy` value, so there is nothing behind a pointer for the
+non-recursion to miss.
+
+No build script, no filesystem, no network, no process spawning. No dependencies
+outside its own optional `alloc` and `derive` features.
+"""

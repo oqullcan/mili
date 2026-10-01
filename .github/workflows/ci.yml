@@ -75,6 +75,23 @@ jobs:
       - name: Dependency policy
         run: cargo deny check
 
+      # cargo-vet is a different question from cargo-deny, and both are here on
+      # purpose. deny asks whether a crate is allowed: licence, features, no
+      # duplicates, nothing in the advisory database. vet asks whether the code in
+      # a crate is the code its publisher said it was.
+      #
+      # `cargo vet check` passing does NOT mean the tree is audited. It means every
+      # crate is audited or exempted, and 76 of them are exempted, which is a record
+      # that nobody has looked rather than a statement that they are fine. Read
+      # supply-chain/README.md for exactly which eleven were read.
+      - name: Install cargo-vet
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: cargo-vet
+
+      - name: Supply chain audits
+        run: cargo vet check --locked
+
   miri:
     name: miri
     runs-on: ubuntu-latest

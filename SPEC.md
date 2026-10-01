@@ -631,8 +631,18 @@ A build is reproducible from the repository alone when the following hold:
 - Every dependency version is written as `=x.y.z` in `Cargo.toml`. Caret
   requirements are not used, so adding a dependency is always an explicit edit.
 - No build script in the dependency tree reads the network, the clock or the
-  environment to produce different output. `cargo deny` and the `Cargo.lock` diff
-  in review are how this is checked.
+  environment to produce different output. `cargo deny` checks that a crate is
+  allowed at all, and `cargo vet` records whether anyone has read the code.
+  `getrandom` is the only build script in the tree, it is eleven lines, and
+  `supply-chain/audits.toml` records what it does: read `CARGO_CFG_SANITIZE` and
+  set one cfg so MemorySanitizer can unpoison its output.
+
+  What `cargo vet check` passing does not mean is recorded in
+  `supply-chain/README.md`, and the short version is that it does not mean the tree
+  is audited. Most of the tree is exempted, which records that nobody has looked.
+  The primitive crates mili's security rests on most directly, `argon2`, `ml-kem`,
+  `ml-dsa`, `sha2`, `sha3`, `chacha20poly1305` and `ed25519-dalek`, are among the
+  unaudited ones.
 
 mili does not claim bit-reproducible output across toolchain versions. A
 different rustc version, a different `target-cpu` or a different linker will
