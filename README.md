@@ -25,6 +25,11 @@ Symmetric keys are 256 bit. One suite per format version. No algorithm
 selection, no runtime option, no environment variable that changes any of the
 above.
 
+A `SymmetricKey` can be generated, backed up and restored, and no format in this
+library encrypts with one, because every format derives its own key from a seed or
+a password. `SPEC.md` section 12.0 records that as a decision and the two
+alternatives that were rejected.
+
 ## Design rules
 
 1. Nothing is implemented here. Primitives come from crates that other people

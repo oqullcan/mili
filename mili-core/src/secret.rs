@@ -142,9 +142,9 @@ impl SymmetricKey {
     ///
     /// There is still no public operation that *consumes* a symmetric key: no
     /// format in `SPEC.md` takes one, because mili's formats derive their own keys
-    /// from a seed or a password. A caller holding a symmetric key today has it
-    /// for their own use, and the honest statement is that this crate does not
-    /// yet hand them anything to use it with.
+    /// from a seed or a password. This type is a storage type, and `SPEC.md`
+    /// section 12.0 records the decision to keep it that way and the two
+    /// alternatives that were rejected.
     ///
     /// [`crate::kem::SealingKey::to_bytes`] says what the caller then owes.
     #[must_use]

@@ -542,6 +542,45 @@ signing_key              64 bytes   ML-DSA-65 seed (32) || Ed25519 seed (32)
 symmetric_key            32 bytes   direct
 ```
 
+Two of the three are consumed by a format: the sealing key by the sealed box and
+the stream, the signing key by the composite signature. The symmetric key is not,
+and that is a decision rather than an omission.
+
+### 12.0 The symmetric key has no consumer
+
+mili-v1 defines no format that takes a symmetric key. Every format derives its own
+key from a seed or from a password: the sealed box and the stream from an X-Wing
+shared secret, the key file and the backup container from Argon2id. There is
+nothing left for a caller's 32 random bytes to be used *with*.
+
+`SymmetricKey` therefore exists as a storage type. It can be generated, wrapped in
+a key file, put in a backup container and read back, which is a coherent thing for
+a key management library to do for a caller whose symmetric keys it otherwise does
+not use. What it cannot do is encrypt anything here.
+
+Three ways this could have gone, and why it went this way:
+
+- **Add a symmetric key format.** A `mili-sym-v1` that takes a 32 byte key would
+  make the type useful. It would also be the one format in mili with no
+  authentication of its public key, no sender authentication, and a shared secret
+  established by a caller-supplied value rather than a KEM. That is a different
+  library with a different threat model, and `THREAT_MODEL.md` sections 5.8 and
+  5.9 would have to be rewritten around it. If it is wanted, it is wanted as its
+  own decision with its own analysis, not as a way to justify an existing type.
+
+- **Remove the type.** Then a caller with a symmetric key has nowhere to put it in
+  a mili backup, and would keep it somewhere else and with less care. The backup
+  container's whole purpose is to be the answer to "where do I keep this", and a
+  key it cannot hold is a key the caller will hold worse.
+
+- **Ship it as a storage type.** This is what happened. The type is honest about
+  what it is: its documentation, `DISCLAIMER.md` and this section all say the same
+  thing, in those words, so a reader meets the same statement in three places
+  rather than discovering the gap by trying to use it.
+
+`SymmetricKey` is not `#[deprecated]`. It is a working storage type with no
+consumer in this version, and a future format version may give it one.
+
 The signing key is the composite private key exactly as
 `draft-ietf-lamps-pq-composite-sigs` defines it: the two component seeds
 concatenated, ML-DSA-65 first. It is not derived from a shorter master seed.

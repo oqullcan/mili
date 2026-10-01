@@ -85,6 +85,9 @@ func GenerateSigningKey() (SigningKey, error) {
 // A key from here is for a caller's own use, and the honest statement is that this
 // library does not hand you anything to use it with. A [Backup] will store and return
 // one, which makes it recoverable and still not usable.
+//
+// SPEC.md section 12.0 records that as a decision rather than an oversight, along
+// with the two alternatives that were rejected.
 func GenerateSymmetricKey() (SymmetricKey, error) {
 	out := make([]byte, SymmetricKeySize)
 	var written C.size_t

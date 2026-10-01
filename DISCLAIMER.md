@@ -133,3 +133,5 @@ and against what, is not something this repository can claim.
 - mili has no public operation that consumes a symmetric key. No format in
   `SPEC.md` takes one. A `SymmetricKey` can be generated, stored in a backup and
   read back, and there is currently nothing in this library to use it with.
+  `SPEC.md` section 12.0 records that as a decision, including why it was not
+  resolved by adding a symmetric key format or by removing the type.
