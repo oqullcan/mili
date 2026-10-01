@@ -111,13 +111,28 @@ pub const PAYLOAD_SIGNING: u8 = 0x02;
 /// The payload type of a symmetric key.
 pub const PAYLOAD_SYMMETRIC: u8 = 0x03;
 
+/// Offset of the `kdf_id` field.
+pub(crate) const KDF_ID_OFFSET: usize = 6;
+
+/// Offset of the `params_id` field.
+pub(crate) const PARAMS_ID_OFFSET: usize = 7;
+
+/// Offset of the `m_cost` field.
+pub(crate) const M_COST_OFFSET: usize = 8;
+
+/// Offset of the `t_cost` field.
+pub(crate) const T_COST_OFFSET: usize = 12;
+
+/// Offset of the `p_cost` field.
+pub(crate) const P_COST_OFFSET: usize = 16;
+
 /// Offset of the Argon2 salt.
 ///
 /// This is not `SALT_END`: the sealed box and the stream carry a 32 byte salt
 /// starting at offset 6, and a key file carries kdf_id, params_id and three cost
 /// parameters there instead. The two layouts share the first six bytes and
 /// nothing after them.
-pub(crate) const ARGON2_SALT_OFFSET: usize = 8 + 4 + 4 + 4;
+pub(crate) const ARGON2_SALT_OFFSET: usize = P_COST_OFFSET + 4;
 
 /// Offset of the `payload_type` field.
 pub(crate) const PAYLOAD_TYPE_OFFSET: usize = ARGON2_SALT_OFFSET + ARGON2_SALT_SIZE;
@@ -327,11 +342,13 @@ impl KeyFile {
     }
 
     /// Borrows the key file bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Takes the key file bytes.
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -431,6 +448,11 @@ fn build_header(
 const _: () = {
     // The layout is load bearing. If any of these move, every key file written by
     // an earlier build becomes unreadable, so they are asserted at compile time.
+    assert!(KDF_ID_OFFSET == 6);
+    assert!(PARAMS_ID_OFFSET == 7);
+    assert!(M_COST_OFFSET == 8);
+    assert!(T_COST_OFFSET == 12);
+    assert!(P_COST_OFFSET == 16);
     assert!(ARGON2_SALT_OFFSET == 20);
     assert!(PAYLOAD_TYPE_OFFSET == 36);
     assert!(PAYLOAD_LEN_OFFSET == 37);
@@ -482,27 +504,29 @@ impl Header {
     /// `open_payload`.
     fn parse(file: &[u8]) -> Result<Self, Error> {
         let body = format::parse_fields(file, FORMAT_TYPE, HEADER_SIZE + TAG_SIZE)?;
-        if file[6] != KDF_ARGON2ID {
+        if file[KDF_ID_OFFSET] != KDF_ARGON2ID || file[PARAMS_ID_OFFSET] != PROFILE_ID {
             return Err(Error::Failed);
         }
-        if file[7] != PROFILE_ID {
-            return Err(Error::Failed);
-        }
-        debug_assert_eq!(body.len(), file.len() - format::FIELDS_OFFSET);
+        debug_assert_eq!(
+            Some(body.len()),
+            file.len().checked_sub(format::FIELDS_OFFSET),
+            "the parse must not have consumed past the prefix"
+        );
 
         let mut salt = [0u8; ARGON2_SALT_SIZE];
         salt.copy_from_slice(&file[ARGON2_SALT_OFFSET..PAYLOAD_TYPE_OFFSET]);
 
-        let m_cost = read_u32(file, 8);
-        let t_cost = read_u32(file, 12);
-        let p_cost = read_u32(file, 16);
-        let payload_len = read_u32(file, PAYLOAD_LEN_OFFSET) as usize;
+        let m_cost = read_u32(file, M_COST_OFFSET)?;
+        let t_cost = read_u32(file, T_COST_OFFSET)?;
+        let p_cost = read_u32(file, P_COST_OFFSET)?;
+        let payload_len = read_u32(file, PAYLOAD_LEN_OFFSET)? as usize;
 
         if payload_len > 64 {
             return Err(Error::Failed);
         }
-        if file.len() != HEADER_SIZE + payload_len + TAG_SIZE {
-            return Err(Error::Failed);
+        match format::exact_length(HEADER_SIZE, payload_len, TAG_SIZE) {
+            Some(expected) if expected == file.len() => {}
+            _ => return Err(Error::Failed),
         }
 
         Ok(Self {
@@ -517,10 +541,19 @@ impl Header {
 }
 
 /// Reads a big endian `u32` at `offset`.
-fn read_u32(file: &[u8], offset: usize) -> u32 {
-    let mut bytes = [0u8; 4];
-    bytes.copy_from_slice(&file[offset..offset + 4]);
-    u32::from_be_bytes(bytes)
+///
+/// Returns an error rather than a number when the range is out of the buffer.
+/// Every call site has already length checked the whole file, so this cannot
+/// fire, but saying so with a fallible read costs nothing and removes the
+/// unchecked index arithmetic that a caller could otherwise move.
+fn read_u32(file: &[u8], offset: usize) -> Result<u32, Error> {
+    let end = offset.checked_add(4).ok_or(Error::Failed)?;
+    let bytes: [u8; 4] = file
+        .get(offset..end)
+        .ok_or(Error::Failed)?
+        .try_into()
+        .map_err(|_| Error::Failed)?;
+    Ok(u32::from_be_bytes(bytes))
 }
 
 /// Rejects an empty password.
@@ -572,6 +605,16 @@ fn wrap_key_for(
 }
 
 /// Derives the Argon2id key encryption key.
+///
+/// # Panics under miri
+///
+/// The miri build panics instead of deriving. This is a guard, not a policy: a
+/// test that reaches this without `#[cfg(not(miri))]` would interpret 64 MiB of
+/// Argon2 three times over and the miri job would appear to hang rather than
+/// fail. One of the two overflow regression tests added for the bug the
+/// `open_backup` fuzz target found was missing the attribute, and the symptom was
+/// a job that never finished rather than a message saying which test was wrong.
+#[cfg(not(miri))]
 pub(crate) fn derive_kek(
     password: &[u8],
     salt: &[u8; ARGON2_SALT_SIZE],
@@ -588,6 +631,22 @@ pub(crate) fn derive_kek(
         .hash_password_into_with_memory(password, salt, out.as_mut(), memory.blocks.as_mut_slice())
         .map_err(|_| Error::Failed)?;
     Ok(SecretBytes::from_bytes(*out))
+}
+
+/// See the note on the real `derive_kek`.
+#[cfg(miri)]
+pub(crate) fn derive_kek(
+    _password: &[u8],
+    _salt: &[u8; ARGON2_SALT_SIZE],
+    _m_cost: u32,
+    _t_cost: u32,
+    _p_cost: u32,
+) -> Result<SecretBytes<32>, Error> {
+    panic!(
+        "mili: a test reached an Argon2id derivation under miri. Add \
+         #[cfg(not(miri))] to it. Argon2id at the documented profile is not \
+         something to interpret."
+    )
 }
 
 /// Argon2's working memory, wiped when it is dropped.
@@ -628,9 +687,10 @@ mod tests {
     use super::{build_header, wrap_key_for, AeadKey, AeadNonce};
     use super::{
         check_params, derive_kek, key_id_of, KeyFile, ARGON2_SALT_SIZE, HEADER_SIZE, KDF_ARGON2ID,
-        KEY_ID_SIZE, M_COST, M_COST_CEILING, M_COST_FLOOR, PAYLOAD_SEALING, PAYLOAD_SIGNING,
-        PAYLOAD_SYMMETRIC, PROFILE, PROFILE_ID, P_COST, P_COST_CEILING, P_COST_FLOOR, T_COST,
-        T_COST_CEILING, T_COST_FLOOR,
+        KDF_ID_OFFSET, KEY_ID_SIZE, M_COST, M_COST_CEILING, M_COST_FLOOR, M_COST_OFFSET,
+        PARAMS_ID_OFFSET, PAYLOAD_SEALING, PAYLOAD_SIGNING, PAYLOAD_SYMMETRIC, PROFILE, PROFILE_ID,
+        P_COST, P_COST_CEILING, P_COST_FLOOR, P_COST_OFFSET, T_COST, T_COST_CEILING, T_COST_FLOOR,
+        T_COST_OFFSET,
     };
     use crate::aead::TAG_SIZE;
     use crate::{Error, SealingKey, SigningKey, SymmetricKey};
@@ -860,6 +920,11 @@ mod tests {
         assert_eq!(HEADER_SIZE, 41);
         assert_eq!(KDF_ARGON2ID, 0x01);
         assert_eq!(PROFILE_ID, 0x01);
+        assert_eq!(KDF_ID_OFFSET, 6);
+        assert_eq!(PARAMS_ID_OFFSET, 7);
+        assert_eq!(M_COST_OFFSET, 8);
+        assert_eq!(T_COST_OFFSET, 12);
+        assert_eq!(P_COST_OFFSET, 16);
         assert_eq!(PAYLOAD_SEALING, 0x01);
         assert_eq!(PAYLOAD_SIGNING, 0x02);
         assert_eq!(PAYLOAD_SYMMETRIC, 0x03);

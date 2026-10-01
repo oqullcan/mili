@@ -1,0 +1,68 @@
+# cargo-deny configuration for the fuzz crate.
+#
+# This is a different policy from the workspace's `deny.toml`, and deliberately
+# narrower in one direction and wider in another.
+#
+# Wider: `libfuzzer-sys` is licensed NCSA, which the workspace does not allow.
+# It is a fuzzing harness that is never linked into a binary anyone ships, so the
+# licence question for it is "may this be compiled on a maintainer's machine",
+# not "may this be redistributed inside mili".
+#
+# Narrower: the workspace pins the exact feature set of every direct dependency,
+# because that feature set decides what mili's own code can reach. The fuzz crate
+# adds a build dependency chain that has nothing to do with mili: `libfuzzer-sys`
+# compiles a C++ library, which pulls in `cc`, which pulls in `jobserver` and
+# `getrandom` with features mili never asks for. Pinning those would mean pinning
+# the union of every upstream build script's choices, which is not a decision this
+# repository makes.
+#
+# What is still enforced is the part that matters for both: crates.io only, no
+# wildcards, no duplicated versions, permissive licences only, and nothing in the
+# advisory database.
+#
+# Run: cargo deny check, from this directory.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    # unicode-ident, reached through every proc macro in the tree
+    "Unicode-3.0",
+    # From libfuzzer-sys, the fuzzing harness. Never linked into mili.
+    "NCSA",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+allow = []
+allow-workspace = false
+deny = []
+skip-tree = []
+
+# Duplicated crate versions, each with the reason it cannot be removed. mili never
+# exchanges data between two versions of the same crate, so a duplicate here is
+# code size and build time, not a protocol concern. The versions are the same ones
+# the workspace records, reached through the same dependencies.
+skip = [
+    { crate = "sha3", reason = "ml-kem 0.3.2 requires sha3 0.11 and x-wing 0.1.0 requires sha3 0.12. Both are SHA-3; mili pins both versions and passes no data between them." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

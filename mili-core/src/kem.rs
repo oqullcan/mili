@@ -59,6 +59,7 @@ impl SealingKey {
     }
 
     /// Wraps an existing 32 byte X-Wing seed.
+    #[must_use]
     pub fn from_bytes(bytes: [u8; SEALING_KEY_SIZE]) -> Self {
         Self(SecretBytes::from_bytes(bytes))
     }
@@ -78,6 +79,7 @@ impl SealingKey {
     /// X25519 key pair, as X-Wing specifies. Expensive relative to the other key
     /// operations: a caller sealing repeatedly should keep the
     /// [`EncapsulationKey`] rather than recompute it for every file.
+    #[must_use]
     pub fn encapsulation_key(&self) -> EncapsulationKey {
         EncapsulationKey(
             x_wing::DecapsulationKey::from(*self.0.as_bytes())
@@ -138,6 +140,7 @@ impl EncapsulationKey {
     ///
     /// These are public bytes. `Display` is still not implemented, so that a key
     /// cannot end up in a log line by accident.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; ENCAPSULATION_KEY_SIZE] {
         let mut bytes = [0u8; ENCAPSULATION_KEY_SIZE];
         bytes.copy_from_slice(self.0.to_bytes().as_slice());

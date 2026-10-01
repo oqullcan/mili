@@ -45,6 +45,7 @@ mili-core/           the library
   src/               error, secret, rng, kdf, kem, aead, seal, signature, stream,
                      format, keyfile, backup
   tests/             property tests against the public API
+fuzz/                cargo-fuzz targets, one per parser, outside the workspace
 tests/vectors/       known answer test vectors, read at compile time
 docs/                created when a document does not belong in the root
 .github/workflows/   CI, third-party actions pinned by commit SHA
@@ -54,11 +55,11 @@ audit.toml           advisory policy
 rust-toolchain.toml  pinned toolchain
 ```
 
-`mili-ffi` and `fuzz/` are added in their phases.
+`fuzz/` is a separate crate outside the workspace, built by `cargo fuzz` with
+sanitizer flags that belong to the fuzz invocation rather than to the library.
+See `fuzz/README.md`.
 
-The tests that derive a password key are excluded under miri. Argon2id
-interprets every 64 bit multiplication over 64 MiB of blocks, and a test suite
-that did that per case would take hours rather than seconds.
+`mili-ffi` is added in its phase.
 
 ## Implemented so far
 
@@ -69,7 +70,7 @@ that did that per case would take hours rather than seconds.
 | 3 composite signatures | done |
 | 4 streaming file encryption | done |
 | 5 password-wrapped key files, backup container | done |
-| 6 fuzz targets, miri, hardening | not started |
+| 6 fuzz targets, miri, hardening | done |
 | 7 `mili-ffi` and the Go binding | not started |
 
 ## Checks
@@ -81,7 +82,17 @@ cargo test --locked --workspace
 cargo +nightly miri test --locked -p mili-core
 cargo deny check
 cargo audit
+
+cd fuzz
+cargo deny check
+cargo +nightly fuzz build
+cargo +nightly fuzz run open_backup corpus/open_backup
 ```
+
+The fuzz targets are a separate job, one target per matrix entry. It replays the
+committed corpus, which is what catches a reintroduced defect, and then fuzzes for
+one minute as a smoke test that the target still reaches its parser. A campaign
+worth the name is run by a person; see `fuzz/README.md`.
 
 `cargo-vet` is not configured yet. See the phase 1 notes.
 
@@ -105,11 +116,19 @@ For the same reason the exhaustive tamper sweeps do not each run a derivation.
 The byte sweep lives in the crate's unit tests at the parse and AEAD layers,
 where it costs one ChaCha20-Poly1305 operation per byte, and the property tests
 carry the randomised end-to-end version.
-`cargo +nightly miri test -p mili-core --lib` takes about two and a half minutes
-with `MIRIFLAGS=-Zmiri-disable-isolation`, which is what CI uses, and about five
-minutes without it. It is a CI job rather than something to run in a loop. Tests
+`cargo +nightly miri test -p mili-core` takes about six minutes with
+`MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-strict-provenance"`, which is what CI
+uses, and about twice that without the flags. It is a CI job rather than something
+to run in a loop. Tests
 that call ML-KEM-768, X25519, ML-DSA-65 or Ed25519 are excluded under miri, as
 are the tests that call Argon2id, one exhaustive Wycheproof sweep is ignored
 there, and the sealed box byte sweep is reduced to one position per region because
 each authenticated operation costs about ten seconds when interpreted. See
 `SPEC.md` section 15.1.
+
+Excluding a test from miri is easy to forget and the symptom is a job that never
+finishes rather than a failure that names the test. `keyfile::derive_kek` panics
+under miri instead of deriving, so a test that reaches it without
+`#[cfg(not(miri))]` fails in seconds with a message saying what to add. Two of the
+overflow regression tests added for the bug the fuzzer found were missing the
+attribute, which is how that guard came to exist.

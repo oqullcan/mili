@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["mili-core"]
+# The fuzz targets are built by `cargo fuzz` with sanitizer flags that belong to
+# the fuzz invocation, not to the library. Keeping the crate out of the workspace
+# means a target cannot change how `mili-core` is built for `cargo test`.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -41,3 +45,22 @@ opt-level = 3
 # Reached only through argon2, and hot for the same reason.
 [profile.dev.package.blake2]
 opt-level = 3
+
+# A release build for the workspace, stated rather than left to cargo's defaults.
+#
+# Overflow checks are deliberately not enabled here. mili's own arithmetic cannot
+# wrap, because `clippy::arithmetic_side_effects` is denied over the library and
+# every operation states how it behaves, so the checks would buy nothing for
+# correctness. They would also cost every dependency that a consumer of this
+# workspace builds, which is not a cost the consumer asked for: a library does not
+# get to choose its caller's profile. Where overflow behaviour has to be caught at
+# runtime it is caught by the fuzz build, whose profile in `fuzz/Cargo.toml` turns
+# the checks on.
+#
+# `lto` and `codegen-units = 1` are the two settings worth having here. They cost
+# build time and buy better code in the AEAD and key agreement paths, and the
+# single codegen unit means the constant time properties the upstream crates
+# document are not split across units that a later pass might reorder.
+[profile.release]
+lto = "fat"
+codegen-units = 1

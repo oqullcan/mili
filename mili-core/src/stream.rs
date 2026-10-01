@@ -60,8 +60,16 @@ pub const HEADER_SIZE: usize = SALT_END + KEM_CIPHERTEXT_SIZE;
 
 /// Bytes a stream adds to a message of `n` plaintext bytes, for `n` in chunks
 /// `c`. Exposed so a caller can predict a file size without writing one.
+///
+/// Saturating, because this is a prediction and `usize::MAX` is the answer to a
+/// size nobody can write. It is `const fn` so a caller can size a buffer at
+/// compile time, and a wrapping result would be a smaller buffer than the caller
+/// asked for, which is worse than a large one.
+#[must_use]
 pub const fn overhead_for_chunks(plaintext_len: usize, chunks: usize) -> usize {
-    HEADER_SIZE + plaintext_len + chunks * TAG_SIZE
+    HEADER_SIZE
+        .saturating_add(plaintext_len)
+        .saturating_add(chunks.saturating_mul(TAG_SIZE))
 }
 
 /// The `final_flag` byte of a chunk that is not the last one.
@@ -231,7 +239,7 @@ pub fn open_buffered<R: Read>(
         if read == 0 {
             return Ok(out);
         }
-        if out.len() + read > maximum_plaintext_len {
+        if out.len().saturating_add(read) > maximum_plaintext_len {
             return Err(Error::Failed);
         }
         out.extend_from_slice(&block[..read]);
@@ -258,7 +266,7 @@ fn open_chunk(
     buffer: &mut Vec<u8>,
     flag: u8,
 ) -> Result<(), Error> {
-    let mut aad = Vec::with_capacity(header.len() + NONCE_SIZE);
+    let mut aad = Vec::with_capacity(header.len().saturating_add(NONCE_SIZE));
     aad.extend_from_slice(header);
     aad.extend_from_slice(&counter_bytes(counter));
     aad.push(flag);
@@ -294,7 +302,9 @@ fn read_full<R: Read>(source: &mut R, buffer: &mut [u8]) -> Result<usize, Error>
     while filled < buffer.len() {
         match source.read(&mut buffer[filled..]) {
             Ok(0) => break,
-            Ok(count) => filled += count,
+            // `read` cannot return more than it was handed the space for, so this
+            // cannot pass `buffer.len()` and end the loop by itself.
+            Ok(count) => filled = filled.saturating_add(count),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(Error::Io(error)),
         }
@@ -343,15 +353,16 @@ impl<W: Write> StreamWriter<W> {
             // counter that is checked.
             return Err(Error::Failed);
         }
-        self.counter += 1;
+        let chunk_counter = self.counter;
+        self.counter = self.counter.checked_add(1).ok_or(Error::Failed)?;
 
-        let mut aad = Vec::with_capacity(self.header.len() + 12);
+        let mut aad = Vec::with_capacity(self.header.len().saturating_add(12));
         aad.extend_from_slice(&self.header);
-        aad.extend_from_slice(&counter_bytes(self.counter - 1));
+        aad.extend_from_slice(&counter_bytes(chunk_counter));
         aad.push(flag);
 
         self.aead
-            .seal_extend(nonce(self.counter - 1, flag), &aad, &mut self.buffer)?;
+            .seal_extend(nonce(chunk_counter, flag), &aad, &mut self.buffer)?;
         self.sink.write_all(&self.buffer).map_err(Error::Io)?;
         self.buffer.clear();
         Ok(())
@@ -381,7 +392,12 @@ impl<W: Write> Write for StreamWriter<W> {
         }
         let mut remaining = data;
         while !remaining.is_empty() {
-            let room = CHUNK_SIZE - self.buffer.len();
+            // `buffer` only ever grows to `CHUNK_SIZE` and is cleared on flush, so
+            // the subtraction cannot underflow. `checked_sub` says so instead of
+            // leaving it to a reader three lines up.
+            let room = CHUNK_SIZE
+                .checked_sub(self.buffer.len())
+                .ok_or(io::Error::other("mili: the chunk buffer is over full"))?;
             let take = room.min(remaining.len());
             self.buffer.extend_from_slice(&remaining[..take]);
             remaining = &remaining[take..];
@@ -464,7 +480,7 @@ impl<R: Read> StreamReader<R> {
         if self.counter == u64::MAX {
             return Err(Error::Failed);
         }
-        self.counter += 1;
+        self.counter = self.counter.checked_add(1).ok_or(Error::Failed)?;
         self.buffer = chunk;
         self.position = 0;
         Ok(true)
@@ -494,10 +510,26 @@ impl<R: Read> Read for StreamReader<R> {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         loop {
             if self.position < self.buffer.len() {
-                let available = self.buffer.len() - self.position;
+                let available =
+                    self.buffer
+                        .len()
+                        .checked_sub(self.position)
+                        .ok_or(io::Error::other(
+                            "mili: the chunk position is past the buffer",
+                        ))?;
                 let take = available.min(out.len());
-                out[..take].copy_from_slice(&self.buffer[self.position..self.position + take]);
-                self.position += take;
+                let end = self
+                    .position
+                    .checked_add(take)
+                    .ok_or(io::Error::other("mili: the chunk position overflowed"))?;
+                let source = self
+                    .buffer
+                    .get(self.position..end)
+                    .ok_or(io::Error::other("mili: the chunk slice is out of range"))?;
+                out.get_mut(..take)
+                    .ok_or(io::Error::other("mili: the output slice is too small"))?
+                    .copy_from_slice(source);
+                self.position = end;
                 return Ok(take);
             }
             match self.fill() {

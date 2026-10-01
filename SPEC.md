@@ -610,6 +610,11 @@ schedule.
 | `draft-ietf-lamps-pq-composite-sigs-19` Appendix E | the whole composite signature construction, both components, empty and non empty context | 1 | 3 |
 | RFC 9106 test vectors | Argon2id | - | 5 |
 | proptest properties and exhaustive byte sweeps | mili formats | - | 2 to 5 |
+| `cargo-fuzz` targets, one per parser | panic freedom and the format invariants each target states | - | 6 |
+
+The Argon2id row is "-" because the RFC's own vectors turned out to be
+unreachable through the API mili calls; `tests/vectors/README.md` records why and
+what is pinned in their place.
 
 Where a Wycheproof or ACVP file has no Rust-side runner, the vectors are
 converted once into the JSON layout under `tests/vectors/` and the runner is

@@ -14,6 +14,11 @@
 //! material is not made stronger by a hundred more of it, and the structural
 //! guarantees are pinned exhaustively in the unit tests instead.
 
+// Argon2id at the documented profile touches 64 MiB three times per derivation,
+// and the X-Wing and ML-DSA code behind the key types is interpreted too. Under
+// miri this file would take hours rather than seconds, so it does not run there.
+#![cfg(not(miri))]
+
 use mili_core::backup::{Backup, StoredKey};
 use mili_core::{Error, SealingKey, SigningKey, SymmetricKey};
 use proptest::prelude::*;

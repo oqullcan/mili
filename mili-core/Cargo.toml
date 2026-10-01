@@ -31,6 +31,16 @@ missing_debug_implementations = "deny"
 unsafe_code = "forbid"
 unreachable_pub = "deny"
 unused_qualifications = "warn"
+# An `unsafe` block cannot appear, so this has nothing to catch today. It is here
+# so that the day the `forbid` is relaxed to `deny`, the parts of unsafe that are
+# easy to get wrong are still refused.
+unsafe_op_in_unsafe_fn = "deny"
 
+# The restriction and pedantic lints mili denies are declared in `src/lib.rs`,
+# with the reason for each next to it. They are not here because most of them fire
+# on test code, where "a caller might ignore this" is not a bug, and
+# `#![cfg_attr(not(test), ...)]` in the crate root is what scopes them to the
+# library. A lint enforced without a stated reason gets removed the first time it
+# is inconvenient.
 [lints.clippy]
 all = { level = "deny", priority = -1 }

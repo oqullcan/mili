@@ -115,9 +115,28 @@ Mitigated by `SPEC.md` section 7.2.
 ### 2.10 Parser panics
 
 `mili-core` is `#![forbid(unsafe_code)]`. Every parse is length checked and
-fallible. No library path contains `unwrap`, `expect` or an explicit panic.
-Panic freedom is checked by `cargo-fuzz` targets on every parser and by
-`cargo +nightly miri test`. Mitigated by the code structure and the test suite.
+fallible. No library path contains `unwrap`, `expect` or an explicit panic, and
+no arithmetic in the library can wrap, because `clippy::arithmetic_side_effects`
+is denied over the library and every operation states how it behaves when it
+overflows. Panic freedom is checked by `cargo-fuzz` targets on every parser, by
+`cargo +nightly miri test`, and by the unit and property suites.
+
+The lint and the fuzzer are not redundant, and the reason is worth recording. The
+`open_backup` fuzz target found a wrapping addition in a length check,
+`HEADER_SIZE + entries_len + TAG_SIZE`, that the unit tests, the property tests
+and the exhaustive byte sweeps all missed. Every one of those generates lengths
+near a real file's length; none of them generates a length near `usize::MAX`,
+which is the only value that makes the sum wrap. The fix is
+`format::exact_length`, the regression is a committed corpus entry that CI
+replays, and the lint is what stops the next one from needing a fuzzer.
+
+Fuzzing is not a proof, and a finite campaign is not a campaign. What the targets
+establish is narrower: they found one defect in roughly the time it took to write
+them, and the corpus makes that one finding permanent rather than leaving it in
+someone's terminal. See `fuzz/README.md` for what each target asserts and for the
+throughput cost of fuzzing a format whose cost parameters come from the file.
+
+Mitigated by the code structure, the lint, the fuzz corpus and the test suite.
 
 ### 2.11 Secret material left in memory after use
 

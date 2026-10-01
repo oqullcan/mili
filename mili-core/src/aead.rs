@@ -89,7 +89,10 @@ impl AeadKey {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::with_capacity(plaintext.len() + TAG_SIZE);
+        // Saturating rather than checked: the capacity is a hint, and a plaintext
+        // long enough to overflow the addition cannot be allocated anyway, so the
+        // allocation is what fails.
+        let mut out = Vec::with_capacity(plaintext.len().saturating_add(TAG_SIZE));
         out.extend_from_slice(plaintext);
         self.seal_extend(nonce, aad, &mut out)?;
         Ok(out)

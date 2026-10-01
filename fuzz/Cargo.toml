@@ -1,0 +1,71 @@
+[package]
+name = "mili-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# This crate is not a member of the workspace on purpose. `cargo fuzz` builds
+# every target with a sanitizer, and the sanitizer flags belong to the fuzz
+# invocation rather than to the library, so a target that leaked them into the
+# workspace would change how `mili-core` is built for `cargo test`.
+#
+# Every dependency is written as `=x.y.z` for the same reason the workspace's
+# are: an unpinned version in a fuzz target is still a version that decides which
+# code runs against a parser.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.10"
+arbitrary = { version = "=1.4.2", features = ["derive"] }
+zeroize = "=1.9.0"
+
+[dependencies.mili-core]
+version = "=0.1.0"
+path = "../mili-core"
+
+[[bin]]
+name = "open_sealed_box"
+path = "fuzz_targets/open_sealed_box.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "open_stream"
+path = "fuzz_targets/open_stream.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "open_stream_fragments"
+path = "fuzz_targets/open_stream_fragments.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "open_key_file"
+path = "fuzz_targets/open_key_file.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "open_backup"
+path = "fuzz_targets/open_backup.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "verify_signature"
+path = "fuzz_targets/verify_signature.rs"
+test = false
+doc = false
+
+# Release profile for the fuzz build: debug assertions on, so an offset that is
+# only asserted in debug fails the fuzzer rather than being trusted, and
+# overflow checks on. Fuzzing an optimised build without assertions would leave
+# exactly the class of bug these targets exist to find unobserved.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+incremental = true

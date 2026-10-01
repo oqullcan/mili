@@ -199,7 +199,9 @@ impl Backup {
             entries.extend_from_slice(&key_id);
             entries.extend_from_slice(&(payload.len() as u32).to_be_bytes());
             entries.extend_from_slice(&payload);
-            count += 1;
+            // The loop runs once per key in the caller's list, so this cannot
+            // pass `u32::MAX` before the allocation that holds the list has.
+            count = count.checked_add(1).ok_or(Error::Failed)?;
         }
 
         let salt = crate::rng::array::<ARGON2_SALT_SIZE>()?;
@@ -263,11 +265,13 @@ impl Backup {
     }
 
     /// Borrows the backup bytes.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Takes the backup bytes.
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -301,7 +305,7 @@ fn encode_payload(key: &StoredKey) -> Result<Vec<u8>, Error> {
     };
     debug_assert!(key.payload_type()? == payload_type);
 
-    let mut out = Vec::with_capacity(PAYLOAD_OVERHEAD + bytes.len());
+    let mut out = Vec::with_capacity(PAYLOAD_OVERHEAD.saturating_add(bytes.len()));
     out.push(payload_type);
     out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     out.extend_from_slice(bytes);
@@ -320,27 +324,39 @@ fn parse_entries(region: &[u8], count: u32) -> Result<Vec<BackupEntry>, Error> {
     let mut offset = 0usize;
 
     for _ in 0..count {
-        let remaining = region.len() - offset;
+        let remaining = region.len().checked_sub(offset).ok_or(Error::Failed)?;
         if remaining < ENTRY_OVERHEAD {
             return Err(Error::Failed);
         }
         // The identifier length is written even though mili only ever writes 16,
         // so that a future version can use a different length without a format
         // change. A length other than 16 is rejected rather than skipped.
-        if read_u16(region, offset) as usize != KEY_ID_SIZE {
+        if read_u16(region, offset)? as usize != KEY_ID_SIZE {
             return Err(Error::Failed);
         }
-        let mut key_id = [0u8; KEY_ID_SIZE];
-        key_id.copy_from_slice(&region[offset + 2..offset + 2 + KEY_ID_SIZE]);
-        let entry_len = read_u32(region, offset + 2 + KEY_ID_SIZE) as usize;
+        let id_start = offset.checked_add(2).ok_or(Error::Failed)?;
+        let id_end = id_start.checked_add(KEY_ID_SIZE).ok_or(Error::Failed)?;
+        let len_end = id_end.checked_add(4).ok_or(Error::Failed)?;
+        if len_end > region.len() {
+            return Err(Error::Failed);
+        }
 
-        let payload_start = offset + ENTRY_OVERHEAD;
-        if entry_len > region.len() - payload_start {
+        let mut key_id = [0u8; KEY_ID_SIZE];
+        key_id.copy_from_slice(&region[id_start..id_end]);
+        let entry_len = read_u32(region, id_end)? as usize;
+
+        let payload_start = offset.checked_add(ENTRY_OVERHEAD).ok_or(Error::Failed)?;
+        let available = region
+            .len()
+            .checked_sub(payload_start)
+            .ok_or(Error::Failed)?;
+        if entry_len > available {
             return Err(Error::Failed);
         }
-        let key = decode_payload(&region[payload_start..payload_start + entry_len])?;
+        let payload_end = payload_start.checked_add(entry_len).ok_or(Error::Failed)?;
+        let key = decode_payload(&region[payload_start..payload_end])?;
         entries.push(BackupEntry { key_id, key });
-        offset = payload_start + entry_len;
+        offset = payload_end;
     }
 
     if offset != region.len() {
@@ -355,13 +371,19 @@ fn decode_payload(payload: &[u8]) -> Result<StoredKey, Error> {
         return Err(Error::Failed);
     }
     let payload_type = payload[0];
-    let payload_len = read_u32(payload, 1) as usize;
-    if payload_len != payload.len() - PAYLOAD_OVERHEAD || payload_len > MAX_KEY_SIZE {
+    let available = payload
+        .len()
+        .checked_sub(PAYLOAD_OVERHEAD)
+        .ok_or(Error::Failed)?;
+    let payload_len = read_u32(payload, 1)? as usize;
+    if payload_len != available || payload_len > MAX_KEY_SIZE {
         return Err(Error::Failed);
     }
 
+    let body = payload.get(PAYLOAD_OVERHEAD..).ok_or(Error::Failed)?;
     let mut key_bytes = Zeroizing::new([0u8; MAX_KEY_SIZE]);
-    key_bytes[..payload_len].copy_from_slice(&payload[PAYLOAD_OVERHEAD..]);
+    let target = key_bytes.get_mut(..payload_len).ok_or(Error::Failed)?;
+    target.copy_from_slice(body);
 
     match payload_type {
         crate::keyfile::PAYLOAD_SEALING => {
@@ -430,18 +452,19 @@ impl Header {
         let mut salt = [0u8; ARGON2_SALT_SIZE];
         salt.copy_from_slice(&file[ARGON2_SALT_OFFSET..ENTRY_COUNT_OFFSET]);
 
-        let m_cost = read_u32(file, M_COST_OFFSET);
-        let t_cost = read_u32(file, T_COST_OFFSET);
-        let p_cost = read_u32(file, P_COST_OFFSET);
-        let entry_count = read_u32(file, ENTRY_COUNT_OFFSET);
-        let entries_len = read_u64(file, ENTRIES_LEN_OFFSET);
+        let m_cost = read_u32(file, M_COST_OFFSET)?;
+        let t_cost = read_u32(file, T_COST_OFFSET)?;
+        let p_cost = read_u32(file, P_COST_OFFSET)?;
+        let entry_count = read_u32(file, ENTRY_COUNT_OFFSET)?;
+        let entries_len = read_u64(file, ENTRIES_LEN_OFFSET)?;
 
         // A u64 length that does not fit in a usize is rejected rather than
         // truncated, so a file cannot be made to look a different length on a
         // 32 bit target than it does here.
         let entries_len = usize::try_from(entries_len).map_err(|_| Error::Failed)?;
-        if file.len() != HEADER_SIZE + entries_len + TAG_SIZE {
-            return Err(Error::Failed);
+        match format::exact_length(HEADER_SIZE, entries_len, TAG_SIZE) {
+            Some(expected) if expected == file.len() => {}
+            _ => return Err(Error::Failed),
         }
 
         Ok(Self {
@@ -456,24 +479,41 @@ impl Header {
 }
 
 /// Reads a big endian `u16` at `offset`.
-fn read_u16(file: &[u8], offset: usize) -> u16 {
-    let mut bytes = [0u8; 2];
-    bytes.copy_from_slice(&file[offset..offset + 2]);
-    u16::from_be_bytes(bytes)
+///
+/// Returns an error rather than a number when the range is out of the buffer.
+/// Every call site has already length checked the whole file, so this cannot
+/// fire, but saying so with a fallible read costs nothing and removes the
+/// unchecked index arithmetic that a caller could otherwise move.
+fn read_u16(file: &[u8], offset: usize) -> Result<u16, Error> {
+    let end = offset.checked_add(2).ok_or(Error::Failed)?;
+    let bytes: [u8; 2] = file
+        .get(offset..end)
+        .ok_or(Error::Failed)?
+        .try_into()
+        .map_err(|_| Error::Failed)?;
+    Ok(u16::from_be_bytes(bytes))
 }
 
-/// Reads a big endian `u32` at `offset`.
-fn read_u32(file: &[u8], offset: usize) -> u32 {
-    let mut bytes = [0u8; 4];
-    bytes.copy_from_slice(&file[offset..offset + 4]);
-    u32::from_be_bytes(bytes)
+/// Reads a big endian `u32` at `offset`. See [`read_u16`].
+fn read_u32(file: &[u8], offset: usize) -> Result<u32, Error> {
+    let end = offset.checked_add(4).ok_or(Error::Failed)?;
+    let bytes: [u8; 4] = file
+        .get(offset..end)
+        .ok_or(Error::Failed)?
+        .try_into()
+        .map_err(|_| Error::Failed)?;
+    Ok(u32::from_be_bytes(bytes))
 }
 
-/// Reads a big endian `u64` at `offset`.
-fn read_u64(file: &[u8], offset: usize) -> u64 {
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&file[offset..offset + 8]);
-    u64::from_be_bytes(bytes)
+/// Reads a big endian `u64` at `offset`. See [`read_u16`].
+fn read_u64(file: &[u8], offset: usize) -> Result<u64, Error> {
+    let end = offset.checked_add(8).ok_or(Error::Failed)?;
+    let bytes: [u8; 8] = file
+        .get(offset..end)
+        .ok_or(Error::Failed)?
+        .try_into()
+        .map_err(|_| Error::Failed)?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 /// Derives the AEAD wrapping key for a backup.
@@ -602,7 +642,7 @@ mod tests {
         assert_eq!(&bytes[8..12], &PROFILE.m_cost.to_be_bytes());
         assert_eq!(&bytes[12..16], &PROFILE.t_cost.to_be_bytes());
         assert_eq!(&bytes[16..20], &PROFILE.p_cost.to_be_bytes());
-        assert_eq!(read_u32(bytes, 36), 1, "one entry");
+        assert_eq!(read_u32(bytes, 36).expect("in range"), 1, "one entry");
     }
 
     #[test]
@@ -620,8 +660,8 @@ mod tests {
         let backup = Backup::from_keys(PASSWORD, keys).expect("build");
         let bytes = backup.as_bytes();
 
-        assert_eq!(read_u32(bytes, 36), 3);
-        let entries_len = read_u64(bytes, 40) as usize;
+        assert_eq!(read_u32(bytes, 36).expect("in range"), 3);
+        let entries_len = read_u64(bytes, 40).expect("in range") as usize;
         assert_eq!(bytes.len(), HEADER_SIZE + entries_len + TAG_SIZE);
         // Each entry is a 2 byte identifier length, a 16 byte identifier, a 4 byte
         // payload length, then a 1 byte type, a 4 byte length and a 32 byte key.
@@ -1057,6 +1097,42 @@ mod tests {
                 "len {len} accepted"
             );
         }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn an_entries_length_that_overflows_is_rejected() {
+        // Found by the `open_backup` fuzz target. `HEADER_SIZE + entries_len +
+        // TAG_SIZE` overflowed for a length near `usize::MAX`, and on a release
+        // build without overflow checks the sum wrapped to a value small enough
+        // to compare equal to a real file length.
+        for entries_len in [u64::MAX, u64::MAX - 10, 1 << 63, usize::MAX as u64 - 64] {
+            let mut bytes = Backup::from_keys(PASSWORD, vec![StoredKey::Sealing(sealing(0x31))])
+                .expect("build")
+                .as_bytes()
+                .to_vec();
+            bytes[40..48].copy_from_slice(&entries_len.to_be_bytes());
+            let round = Backup::from_bytes(&bytes).expect("parses");
+            assert!(
+                matches!(round.open(PASSWORD), Err(Error::Failed)),
+                "entries_len {entries_len} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn an_entries_length_that_cannot_fit_a_usize_is_rejected() {
+        // A 32 bit target reads this same field as a different number. A file
+        // that is a valid backup on one target must be the same verdict on the
+        // other, so a length that does not fit is refused rather than truncated.
+        let mut bytes = Backup::from_keys(PASSWORD, vec![StoredKey::Sealing(sealing(0x31))])
+            .expect("build")
+            .as_bytes()
+            .to_vec();
+        bytes[40..48].copy_from_slice(&u64::MAX.to_be_bytes());
+        let round = Backup::from_bytes(&bytes).expect("parses");
+        assert!(matches!(round.open(PASSWORD), Err(Error::Failed)));
     }
 
     #[test]

@@ -94,12 +94,96 @@ jobs:
       # `-Zmiri-disable-isolation` runs every test in one process instead of one
       # process per test. It removes a debugging aid, not a check: with it a
       # failure cannot be inspected in an attached debugger. It is worth about a
-      # factor of two, which is the difference between a seven minute job and a
-      # three minute one.
+      # factor of two, which is the difference between a twelve minute job and a
+      # six minute one.
+      #
+      # `-Zmiri-strict-provenance` costs nothing here, which is expected and is
+      # also the honest reason to keep it: it catches integer-to-pointer casts,
+      # and mili-core is `#![forbid(unsafe_code)]`, so there are none in the code
+      # this job is checking. It is here for the day an `unsafe` block appears,
+      # and as a standing statement that the absence is deliberate.
+      #
+      # The run is about six minutes: 60 library tests and 8 doctests. Tests that
+      # call ML-KEM-768, X25519, ML-DSA-65, Ed25519 or Argon2id are excluded under
+      # miri. `keyfile::derive_kek` panics under miri rather than deriving, so a
+      # test that reaches it without `#[cfg(not(miri))]` fails with a message
+      # naming the fix instead of hanging the job.
       - name: Tests under miri
         run: cargo miri test --locked -p mili-core
         env:
-          MIRIFLAGS: -Zmiri-disable-isolation
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One target per job rather than one job for all of them, so a slow target
+      # does not serialise behind the others and a failure names the target.
+      fail-fast: false
+      matrix:
+        target:
+          - open_sealed_box
+          - open_stream
+          - open_stream_fragments
+          - open_key_file
+          - open_backup
+          - verify_signature
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # libFuzzer needs a nightly compiler. This is the one job that does not use
+      # the pinned toolchain, and it never links the result: nothing here
+      # produces a binary anyone runs.
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: fuzz
+
+      - name: Check the fuzz lockfile is complete and current
+        working-directory: fuzz
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Dependency policy for the fuzz crate
+        working-directory: fuzz
+        run: cargo deny check
+
+      # The recorded regressions. Passing files rather than a corpus directory
+      # makes libFuzzer execute them and stop, instead of using them as seeds and
+      # continuing to fuzz. This is what turns "someone reintroduced the bug the
+      # fuzzer found once" into a build failure in seconds.
+      - name: Replay the committed regressions
+        working-directory: fuzz
+        run: |
+          shopt -s nullglob
+          inputs=(regressions/${{ matrix.target }}/*)
+          if [ ${#inputs[@]} -eq 0 ]; then
+            echo "no regressions recorded for ${{ matrix.target }}"
+            exit 0
+          fi
+          cargo +nightly fuzz run ${{ matrix.target }} "${inputs[@]}"
+
+      # A short campaign. This is a smoke test, not a campaign: it proves the
+      # target builds under the sanitizers and covers something, and it would
+      # catch a target that had quietly stopped reaching its parser. A campaign
+      # worth the name is run by a person against a corpus that grows; see
+      # fuzz/README.md.
+      - name: Fuzz for one minute
+        working-directory: fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=60 \
+            -print_final_stats=1
 
   audit:
     name: advisory audit

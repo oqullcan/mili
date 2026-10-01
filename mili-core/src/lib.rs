@@ -89,6 +89,30 @@
 #![forbid(unsafe_code)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(rustdoc::private_intra_doc_links)]
+// Every arithmetic operation in the library states how it behaves when it wraps.
+//
+// This is a restriction lint rather than a style one. mili parses lengths, counts
+// and offsets out of files an attacker controls, and a wrapping addition in that
+// code produces a number the writer never wrote, which is how a length check
+// turns into a length that passes. The `open_backup` fuzz target found exactly
+// that: `HEADER_SIZE + entries_len + TAG_SIZE` wrapped for a length near
+// `usize::MAX`, and on a release build without overflow checks the wrapped sum
+// was small enough to compare equal to a real file length.
+//
+// The lint is not applied to the test modules, where `len % 256` and friends are
+// arithmetic on values the test itself chose and there is nothing to wrap.
+#![cfg_attr(not(test), deny(clippy::arithmetic_side_effects))]
+// `must_use` on everything whose result a caller could drop and regret.
+//
+// `Result` already carries `#[must_use]`, so these are the accessors that hand
+// back a key, a key identifier or a file's bytes as a plain value: a caller who
+// calls `to_bytes()` and drops the result has a bug the compiler can see. The lint
+// is scoped to the library because on test code "someone might ignore this" is
+// not a bug.
+#![cfg_attr(
+    not(test),
+    deny(clippy::must_use_candidate, clippy::return_self_not_must_use)
+)]
 
 mod aead;
 pub mod backup;

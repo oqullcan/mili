@@ -14,6 +14,11 @@
 //! hundred more of them, and the structural guarantees are pinned exhaustively in
 //! the unit tests instead.
 
+// Argon2id at the documented profile touches 64 MiB three times per derivation,
+// which is not something to interpret. Under miri this file would take hours
+// rather than seconds, so it does not run there.
+#![cfg(not(miri))]
+
 use mili_core::{Error, SealingKey};
 use proptest::prelude::*;
 

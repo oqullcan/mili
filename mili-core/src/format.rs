@@ -66,6 +66,22 @@ pub(crate) fn parse_fields(
     Ok(&file[FIELDS_OFFSET..])
 }
 
+/// The total length of a file whose authenticated header is `header` and whose
+/// body is `body`, or `None` if that does not fit in a `usize`.
+///
+/// Every parser that reads a length out of a file needs this, and the addition
+/// overflows: a length field can name a number near `usize::MAX`, and on a
+/// release build without overflow checks the sum wraps to something small enough
+/// to compare equal to a real file length. A parser that then trusts the wrapped
+/// sum is reading a length the writer never wrote.
+///
+/// This was found by the `open_backup` fuzz target, not by the test suite. The
+/// unit and property tests could not reach it: the value has to be near
+/// `usize::MAX`, and no test was asserting on that range.
+pub(crate) fn exact_length(header: usize, body: usize, tag: usize) -> Option<usize> {
+    header.checked_add(body)?.checked_add(tag)
+}
+
 /// Parses a file that carries a 32 byte salt at [`SALT_OFFSET`].
 ///
 /// `body` is everything after the salt.

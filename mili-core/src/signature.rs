@@ -114,6 +114,7 @@ impl SigningKey {
     }
 
     /// Wraps an existing 64 byte composite seed.
+    #[must_use]
     pub fn from_bytes(bytes: [u8; SIGNING_KEY_SIZE]) -> Self {
         Self(SecretBytes::from_bytes(bytes))
     }
@@ -127,6 +128,7 @@ impl SigningKey {
     }
 
     /// Derives the matching verifying key.
+    #[must_use]
     pub fn verifying_key(&self) -> VerifyingKey {
         let (mldsa_seed, ed25519_seed) = split(&self.0);
         VerifyingKey(component_public_keys(&mldsa_seed, &ed25519_seed))
@@ -191,6 +193,7 @@ impl VerifyingKey {
     ///
     /// These are public bytes. `Display` is still not implemented, so that a key
     /// cannot end up in a log line by accident.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; VERIFYING_KEY_SIZE] {
         self.0
     }
@@ -260,7 +263,14 @@ impl core::fmt::Debug for VerifyingKey {
 fn transcript(message: &[u8]) -> Vec<u8> {
     let prehash = Sha512::digest(message);
 
-    let mut out = Vec::with_capacity(COMPOSITE_PREFIX.len() + LABEL.len() + 1 + 64);
+    // Every term is a constant or a label length, so this cannot overflow in
+    // practice; saturating states that rather than leaving it to be checked.
+    let capacity = COMPOSITE_PREFIX
+        .len()
+        .saturating_add(LABEL.len())
+        .saturating_add(1)
+        .saturating_add(64);
+    let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(COMPOSITE_PREFIX);
     out.extend_from_slice(LABEL);
     out.push(0);
