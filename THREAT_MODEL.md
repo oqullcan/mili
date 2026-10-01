@@ -190,10 +190,22 @@ have no way to notice.
 
 ### 3.3 Cryptographic implementation correctness
 
-Every primitive is a third-party crate. `chacha20poly1305` 0.11 has one NCC
-Group audit with no significant findings. `x-wing` 0.1.0, `ml-kem` 0.3.2,
-`ml-dsa` 0.1.1, `ed25519-dalek` 3.0.0, `x25519-dalek` 3.0.0 and `argon2` 0.6.0
-carry no audit. Known incidents recorded in this repository:
+Every primitive is a third-party crate, and mili implements none of them. The risk
+in a wrapper is that it composes correct pieces wrongly, which is what a third
+party audit of mili itself would look for and what nobody has done.
+
+For the pieces, `chacha20poly1305` 0.11 has one NCC Group audit with no
+significant findings. `x-wing` 0.1.0, `ml-kem` 0.3.2, `ml-dsa` 0.1.1,
+`ed25519-dalek` 3.0.0, `x25519-dalek` 3.0.0 and `argon2` 0.6.0 carry no
+third-party audit that mili found.
+
+What mili has instead is its own reading of each crate, recorded in
+`supply-chain/audits.toml`. That is a weaker statement than an independent audit
+and is not offered as one; `DISCLAIMER.md` section 3 says the same. The part of
+the tree that remains partly unread is named there: `libc` and
+`curve25519-dalek`.
+
+Known incidents recorded in this repository:
 
 - CVE-2026-24850, `ml-dsa` before 0.1.0-rc.4, accepted signatures with repeated
   hint indices. Fixed at 0.1.0-rc.4; mili pins 0.1.1.

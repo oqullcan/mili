@@ -10,6 +10,10 @@ exclude = ["fuzz"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/oqullcan/mili"
+# Not published to crates.io. The repository is the distribution channel, and a
+# published crate is a promise about API stability that 0.1.0 does not make.
 publish = false
 
 [workspace.dependencies]

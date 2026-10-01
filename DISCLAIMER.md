@@ -17,18 +17,29 @@ constructions or new analyses.
 
 ## 3. Third-party components
 
-The primitives mili composes come from outside this repository:
+The primitives mili composes come from outside this repository.
 
-| Component | Audit status |
-|-----------|--------------|
-| `chacha20poly1305` | one NCC Group audit, no significant findings |
-| `x-wing` | not audited |
-| `ml-kem` | not audited |
-| `x25519-dalek` | not audited |
-| `ml-dsa` | not audited |
-| `ed25519-dalek` | not audited |
-| `argon2` | not audited |
-| `hkdf`, `sha2` | not audited within mili's usage |
+**No third party has audited mili, and this repository is not an audit of the
+crates below.** What mili has done is read each crate's source itself and record
+what was read, in `supply-chain/audits.toml`. Every crate on a production edge has
+one of those notes. That is not the same as an independent audit and it should not
+be quoted as one: nobody outside this repository looked, and the two largest notes
+say in their own text that they are partial.
+
+| Component | Third-party audit | Read by mili |
+|-----------|-------------------|--------------|
+| `chacha20poly1305` | one NCC Group audit, no significant findings | yes |
+| `x-wing`, `ml-kem`, `ml-dsa` | none found | yes |
+| `x25519-dalek`, `ed25519-dalek`, `ed25519` | none found | yes |
+| `argon2`, `blake2`, `hkdf`, `sha2`, `hmac` | none found | yes |
+| `curve25519-dalek` | none found | **partly** |
+| `libc` | none found | **partly** |
+
+The two partial ones are `curve25519-dalek` and `libc`. Their notes say which part
+was read and which was not, and `supply-chain/README.md` says the same thing a
+second time. `libc` is 130k lines of FFI declarations and `curve25519-dalek` is
+35k lines of field arithmetic, so reading either end to end is a separate piece of
+work that has not been done.
 
 Two algorithms in mili's suite are specified in internet-drafts, not RFCs:
 X-Wing (`draft-connolly-cfrg-xwing-kem`) and the composite signature
