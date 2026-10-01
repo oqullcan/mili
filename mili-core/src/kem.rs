@@ -380,6 +380,11 @@ mod tests {
     /// `expand_key` happened to mask would still pass them. This records that the
     /// two vector sets are testing different things, which is why the ACVP file
     /// exists rather than the draft file being called sufficient.
+    /// `#[cfg(not(miri))]` because it reads `ACVP_JSON`, `AcvpFile` and
+    /// `hex_decode`, all of which are gated above. Without it this test fails to
+    /// compile under miri with three "cannot find" errors rather than skipping,
+    /// which is how the gate on the other twelve was arrived at.
+    #[cfg(not(miri))]
     #[test]
     fn the_two_vector_sets_are_not_the_same_coverage() {
         let draft = vector_file();

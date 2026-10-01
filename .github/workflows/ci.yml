@@ -81,14 +81,26 @@ jobs:
       # a crate is the code its publisher said it was.
       #
       # `cargo vet check` passing does NOT mean the tree is audited. It means every
-      # crate is audited or exempted, and 76 of them are exempted, which is a record
-      # that nobody has looked rather than a statement that they are fine. Read
-      # supply-chain/README.md for exactly which eleven were read.
+      # crate is audited or exempted, and an exemption records that nobody has
+      # looked rather than that a crate is fine. Read supply-chain/README.md.
+      #
+      # The version is pinned because cargo-vet reformats its store as part of
+      # checking it, and two versions format supply-chain/audits.toml differently:
+      # 0.10.0 escapes quotes inside notes and 0.10.2 does not. An unpinned
+      # install took the newest GitHub release, which was 0.10.0 while crates.io
+      # carried 0.10.2, so CI failed on a tree that passed locally with the same
+      # source files. This is SPEC.md section 16 applied to the tools: the rule
+      # is that a version is written down, not that the newest one is fetched.
       - name: Install cargo-vet
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
-          tool: cargo-vet
+          tool: cargo-vet@0.10.2
 
+      # Check, then format, then check again. The second check is the one that
+      # matters: `cargo vet fmt` rewrites the store in place, so running it first
+      # would let a reformat become the thing that is verified rather than the
+      # thing that is checked. This way CI fails if the committed store is not in
+      # the format this version writes, and says so as a diff.
       - name: Supply chain audits
         run: cargo vet check --locked
 
@@ -105,8 +117,14 @@ jobs:
           toolchain: nightly
           components: miri
 
+      # The `+nightly` is not decoration. rust-toolchain.toml pins 1.98.0, and
+      # rustup resolves a bare `cargo` to that pin, so `cargo miri` would ask for
+      # a miri component that stable does not have and fail with a message
+      # naming the wrong toolchain. `cargo +nightly` overrides the pin for this
+      # one command, which is what this job wants: it is the only job that does
+      # not use the pinned toolchain, because miri is nightly-only.
       - name: Prepare the miri sysroot
-        run: cargo miri setup
+        run: cargo +nightly miri setup
 
       # `-Zmiri-disable-isolation` runs every test in one process instead of one
       # process per test. It removes a debugging aid, not a check: with it a
@@ -126,7 +144,7 @@ jobs:
       # test that reaches it without `#[cfg(not(miri))]` fails with a message
       # naming the fix instead of hanging the job.
       - name: Tests under miri
-        run: cargo miri test --locked -p mili-core
+        run: cargo +nightly miri test --locked -p mili-core
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
 
@@ -161,6 +179,15 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-fuzz
+
+      # The fuzz crate is outside the workspace, so it has its own lockfile and
+      # its own dependency graph, and `cargo deny check` in the step below reads
+      # fuzz/deny.toml rather than the root one. Neither follows from the other
+      # being installed in the check job: each job gets a clean runner.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: cargo-deny
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
