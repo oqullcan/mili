@@ -106,6 +106,32 @@ impl<const N: usize> Eq for SecretBytes<N> {}
 pub struct SymmetricKey(SecretBytes<SYMMETRIC_KEY_SIZE>);
 
 impl SymmetricKey {
+    /// Wraps an existing 32 byte key.
+    ///
+    /// Crate-private, for reading a key back out of a key file. The public way
+    /// to obtain a symmetric key is [`SymmetricKey::generate`], and a caller
+    /// that has key bytes from elsewhere has a problem mili does not solve.
+    pub(crate) fn from_bytes(bytes: [u8; SYMMETRIC_KEY_SIZE]) -> Self {
+        Self(SecretBytes::from_bytes(bytes))
+    }
+
+    /// Borrows the underlying key bytes.
+    ///
+    /// Crate-private, for wrapping the key in a key file, for reading one back
+    /// out of a backup, and for the FFI boundary. The public surface of a
+    /// symmetric key is deliberately this narrow.
+    ///
+    /// [`crate::backup::Backup::open`] hands a `StoredKey::Symmetric` to a
+    /// caller, and a caller cannot yet do anything public with it: there is no
+    /// public operation that consumes a symmetric key. That is a statement about
+    /// this crate's current surface, not a claim that a restored key is useless,
+    /// and it is why a restored symmetric key is not dropped here with a warning.
+    /// Whoever holds the backup has the key; whether they can use it is the
+    /// subject of whichever phase adds the operation that takes one.
+    pub(crate) fn expose(&self) -> &[u8; SYMMETRIC_KEY_SIZE] {
+        self.0.as_bytes()
+    }
+
     /// Draws a new key from the operating system CSPRNG.
     ///
     /// # Errors

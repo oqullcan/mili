@@ -98,10 +98,19 @@ A key file whose stored parameters fall below the documented floor is rejected
 before Argon2 runs, so an attacker cannot rewrite a strong key file into a weak
 one and have it accepted. Mitigated by `SPEC.md` section 7.2.
 
-### 2.9 Memory exhaustion from a hostile key file
+### 2.9 Cost exhaustion from a hostile key file
 
-`m_cost` above 1 GiB is rejected before any allocation. `m_cost` below the floor
-is also rejected. Mitigated by `SPEC.md` section 7.2.
+`m_cost` above 1 GiB is rejected before any allocation, and `m_cost` below the
+floor is also rejected. `t_cost` above 8 and `p_cost` above 16 are rejected on the
+same path, and `m_cost >= 4 * p_cost` is checked so that Argon2 is never asked
+for a lane layout it cannot serve.
+
+The `t_cost` ceiling is the part that is easy to leave out. `m_cost` bounds the
+allocation; nothing else bounds the number of passes over it, so a file naming a
+huge `t_cost` ties up whoever opens it while holding a perfectly ordinary 64 MiB.
+Section 5.7 covers the consequence and states what is still not bounded.
+
+Mitigated by `SPEC.md` section 7.2.
 
 ### 2.10 Parser panics
 
@@ -284,6 +293,25 @@ mili does not attempt to prevent denial of service by a caller that supplies a
 file large enough to exhaust memory. `open_buffered` has an explicit bound. A
 streaming reader over a hostile but well formed file will read as far as the
 file allows.
+
+A password wrapped key file and a backup container are different, because their
+cost parameters are attacker-chosen *before* anything is decrypted. `SPEC.md`
+section 7.2 bounds `m_cost` at 1 GiB, `t_cost` at 8 and `p_cost` at 16, and
+requires `m_cost >= 4 * p_cost`. All of these are checked before the working
+memory is reserved, so opening a hostile file costs a constant amount of work
+rather than whatever the file asks for.
+
+The `t_cost` bound is the one that matters most and is the one mili got wrong
+first: with only a floor, a file naming two billion passes holds a 64 MiB
+allocation and then reads it two billion times, which is a denial of service
+against whoever opens the file and which `m_cost`'s ceiling does not catch. The
+ceiling is a property of mili, not of Argon2, and it is in the format
+specification rather than only in the code so that an implementation that copies
+the layout copies the bound.
+
+What mili does not do is rate limit opens. A caller that opens a hundred
+hostile files in a loop pays for a hundred bounded derivations. Bounding each
+derivation is not bounding the number of them.
 
 ### 5.8 Key distribution
 

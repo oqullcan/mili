@@ -120,8 +120,8 @@ impl SigningKey {
 
     /// Borrows the seed.
     ///
-    /// Crate-private until a phase needs it for a key file or the FFI boundary.
-    #[allow(dead_code)]
+    /// Crate-private, for wrapping the key in a key file and for the FFI
+    /// boundary.
     pub(crate) fn expose(&self) -> &[u8; SIGNING_KEY_SIZE] {
         self.0.as_bytes()
     }

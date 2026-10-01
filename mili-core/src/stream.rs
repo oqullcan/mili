@@ -99,7 +99,8 @@ const FINAL: u8 = 0x01;
 pub fn seal_stream<W: Write>(key: &SealingKey, mut sink: W) -> Result<StreamWriter<W>, Error> {
     let mut header = Vec::with_capacity(HEADER_SIZE);
     let salt = crate::rng::array::<SALT_SIZE>()?;
-    format::write_prefix(&mut header, FORMAT_TYPE, &salt);
+    format::write_fields(&mut header, FORMAT_TYPE);
+    header.extend_from_slice(&salt);
     let (kem_ct, shared) = key.encapsulation_key().encapsulate();
     header.extend_from_slice(&kem_ct);
 
@@ -152,7 +153,7 @@ pub fn open_stream<R: Read>(mut source: R, keys: &[&SealingKey]) -> Result<Strea
     let mut header = vec![0u8; HEADER_SIZE];
     read_full(&mut source, &mut header)?;
 
-    let prefix = format::parse_prefix(&header, FORMAT_TYPE, HEADER_SIZE)?;
+    let prefix = format::parse_with_salt(&header, FORMAT_TYPE, HEADER_SIZE)?;
     let kem_ct = &prefix.body[..KEM_CIPHERTEXT_SIZE];
 
     // The first chunk is read once, before the key loop. Reading it inside the

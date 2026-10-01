@@ -21,22 +21,30 @@ properties that are named. See `THREAT_MODEL.md` for the property list and
 
 ## 2. Shared header
 
-Every mili file begins with this header. The header is authenticated: it is bound
-into the AEAD associated data of every ciphertext that follows it.
+Every mili file begins with these six bytes. They are authenticated: they are
+bound into the AEAD associated data of every ciphertext that follows them.
 
 ```
 ofs  len  field
 0    4    magic          6D 69 6C 69  ("mili")
 4    1    format_type    see section 3
 5    1    version        0x01 for mili-v1
-6    32   salt           uniform random per file, from the OS CSPRNG
 ```
 
-Total header size: 38 bytes.
+Nothing is shared past byte six. The sealed box and the stream put a 32 byte salt
+at offset 6, because they derive a payload key from a freshly generated key and
+a salt. The password-wrapped key file and the backup container instead put the
+identifier of their key derivation function, a parameter set identifier, three
+Argon2id cost parameters and a 16 byte Argon2id salt there, because they have to
+be readable before anything can be decrypted. The two layouts were originally
+written as sharing a 32 byte salt at offset 6, which is not possible: both
+layouts need offset 6 and only one of them can have it.
 
-`salt` is 32 uniform random bytes drawn from the operating system CSPRNG for
-every file. It is the only field that carries entropy chosen by the writer, and
-it is what makes the derived payload key unique per file. See section 9.
+`SALT_SIZE`, `SALT_OFFSET` and `SALT_END` in the implementation refer to the
+first of the two layouts and are used only by the sealed box and the stream. The
+key file and the backup container define their own offsets, and the constants are
+asserted at compile time so that moving a field is a build failure rather than a
+file that an earlier build wrote and a later build cannot read.
 
 A file whose `magic` does not match is rejected. A file whose `format_type` does
 not match the operation being attempted is rejected. A file whose `version` is
@@ -376,9 +384,29 @@ Applied before Argon2 runs:
 - `p_cost >= 1`.
 - `m_cost <= 1048576` (1 GiB). A larger value is rejected before any allocation,
   so a hostile file cannot force unbounded memory use.
+- `t_cost <= 8`.
+- `p_cost <= 16`.
+- `m_cost >= 4 * p_cost`.
 
-The upper bound is a property of mili, not of Argon2. It is checked before the
-derivation so that a file claiming 256 GiB costs nothing to reject.
+Both floors and all three ceilings are properties of mili, not of Argon2. They
+are checked before the derivation, so a file naming 256 GiB or two billion passes
+costs nothing to reject.
+
+The `t_cost` ceiling exists because `t_cost` multiplies the work of a derivation
+and the value comes from the file being opened. Without it, a file naming
+`t_cost = 2_000_000_000` is a denial of service delivered by the file itself,
+against whoever opens it, and `m_cost`'s ceiling would not catch it: the memory
+allocation is bounded while the number of passes over it is not.
+
+The `p_cost` ceiling exists because `m_cost >= 4 * p_cost` makes the lane count
+bounded by the memory ceiling anyway, and Argon2 requires at least four blocks
+per lane. Writing the bound down rather than relying on that derivation keeps the
+rejection explicit and cheap.
+
+The `m_cost >= 4 * p_cost` check keeps a combination Argon2 would refuse out of
+the error path. Argon2 reports its own configuration error for too few blocks;
+mili rejects the file before reserving memory, so the caller sees
+`Error::Failed` like every other rejection.
 
 ### 7.3 Loss of a key
 
@@ -390,7 +418,7 @@ only copy is one file has no recovery path.
 
 ## 8. Backup container (`format_type = 0x11`)
 
-Wraps several key files under one password.
+Wraps several keys under one password.
 
 ```
 ofs  len  field
@@ -409,16 +437,51 @@ ofs  len  field
                                         u16 key_id_len
                                         key_id_len key_id
                                         u32 entry_len
-                                        entry_len the bytes of the key file of
-                                          section 7 starting at ofs 0
+                                        entry_len one key, as:
+                                          u8 payload_type
+                                          u32 payload_len
+                                          payload_len key bytes
 ```
 
 The entry region is encrypted with the same key schedule and AEAD as section 7,
-with `aad = header[0..48]`.
+with `aad = header[0..48]`. Argon2 runs once for the whole container, whatever
+`entry_count` is.
 
 A backup container is identified by its Argon2 profile and salt, so restoring a
 container re-derives the same wrapping key on any platform. `key_id` is the
-value of section 11, used only to detect a wrong backup, not to select a key.
+value of section 11, used to tell the entries apart and to detect a wrong backup,
+not to select a key. `entry_count` entries with the same `key_id` are refused, so
+a container never holds a key twice under one identifier.
+
+### 8.1 Why an entry is a key and not a key file
+
+An entry holds key material with a type tag. It does not hold the bytes of a key
+file of section 7.
+
+An earlier draft of this section specified an entry as "the bytes of the key file
+of section 7 starting at ofs 0". That cannot work, and the reason is worth
+recording so that it is not reintroduced. A key file inside the container would
+carry its own Argon2 salt and its own cost parameters, and would be wrapped under
+its own password. Restoring the backup would then need the container's password
+and every key file's password, and the container's password would buy nothing
+that N key files did not already provide separately.
+
+An entry is therefore the key itself. Restoring produces a `SealingKey`,
+`SigningKey` or `SymmetricKey`, and putting one back into a key file is the
+caller's next step, under whatever password the caller chooses. The container's
+password protects the container; it is not the password of the key files that come
+out of it.
+
+`payload_type` and `payload_len` are the section 7 field names and the section 7
+values: `0x01` for a 32 byte X-Wing seed, `0x02` for a 64 byte composite signing
+seed, `0x03` for a 32 byte symmetric key. A `payload_len` that does not match its
+`payload_type`, or a `payload_type` mili does not implement, is rejected.
+
+### 8.2 Restoring is not the same as wrapping
+
+`Backup::open` returns keys. It does not return key files, and it does not
+decide a password for them. Section 12.1 describes seed rotation; recovering a key
+from a backup is not rotation, because the key does not change.
 
 ## 9. KEM
 

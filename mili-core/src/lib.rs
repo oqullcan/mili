@@ -91,10 +91,12 @@
 #![deny(rustdoc::private_intra_doc_links)]
 
 mod aead;
+pub mod backup;
 pub mod error;
 mod format;
 pub mod kdf;
 mod kem;
+pub mod keyfile;
 mod rng;
 pub mod seal;
 pub mod secret;

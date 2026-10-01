@@ -19,3 +19,25 @@ chacha20poly1305 = { version = "=0.11.0", default-features = false, features = [
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "zeroize"] }
 hybrid-array = "=0.4.15"
+# The default feature set is turned off, which drops `password-hash`, `rand` and
+# `serde`: mili derives a key, it never produces a PHC string to store in a
+# password database, and it never verifies one. `alloc` is required for the block
+# vector the derivation fills, and `zeroize` because those blocks hold the
+# password's memory-hardness work product and have to be cleared on drop.
+#
+# `base64ct` remains, as argon2's own dependency, for PHC encoding that mili does
+# not call. It is a supply chain question rather than a feature question, so it
+# is left to `cargo vet` and the advisory database instead of being worked around.
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+
+# Argon2 touches 64 MiB three times per derivation. Unoptimised, one derivation
+# takes about two seconds in the development profile, the exhaustive tamper
+# sweeps cost one derivation per tested byte, and the suite takes over ten
+# minutes instead of four. This changes how the dependency is compiled, not what
+# it computes, so the cross implementation vectors still pin the output.
+[profile.dev.package.argon2]
+opt-level = 3
+
+# Reached only through argon2, and hot for the same reason.
+[profile.dev.package.blake2]
+opt-level = 3

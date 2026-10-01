@@ -85,7 +85,8 @@ pub fn seal(public: &EncapsulationKey, plaintext: &[u8]) -> Result<Vec<u8>, Erro
     let (kem_ct, shared) = public.encapsulate();
 
     let mut header = Vec::with_capacity(HEADER_SIZE);
-    format::write_prefix(&mut header, FORMAT_TYPE, &salt);
+    format::write_fields(&mut header, FORMAT_TYPE);
+    header.extend_from_slice(&salt);
     header.extend_from_slice(&kem_ct);
 
     let aead = aead_for(&shared, &salt)?;
@@ -177,7 +178,7 @@ impl<'a> Header<'a> {
     /// bytes are public, and the authentication happens in the AEAD step, so this
     /// parse only decides whether the buffer is shaped like a sealed box at all.
     fn parse(sealed: &'a [u8]) -> Result<Self, Error> {
-        let prefix = format::parse_prefix(sealed, FORMAT_TYPE, SEALED_BOX_OVERHEAD)?;
+        let prefix = format::parse_with_salt(sealed, FORMAT_TYPE, SEALED_BOX_OVERHEAD)?;
         Ok(Self {
             bytes: &sealed[..HEADER_SIZE],
             salt: prefix.salt,

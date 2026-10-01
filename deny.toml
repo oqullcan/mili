@@ -104,6 +104,23 @@ crate = "ed25519-dalek@3.0.0"
 exact = true
 allow = ["alloc", "zeroize"]
 
+# `alloc` is required for the block vector that Argon2 fills its working memory
+# from. `zeroize` is required for the same reason it is required elsewhere: the
+# blocks hold the password's memory-hardness work product and have to be cleared.
+# mili turns the default feature set off, which also drops `password-hash`,
+# `rand`, `serde` and `base64ct`'s `alloc`; the first two would pull in a
+# dependency mili has no use for, and mili does not read or write PHC strings.
+[[bans.features]]
+crate = "argon2@0.6.0"
+exact = true
+allow = ["alloc", "zeroize"]
+
+# base64ct is not an exact entry. argon2 depends on it and turns on `alloc`;
+# nothing else in the tree depends on it. Whether mili wants a second dependency
+# for base64 that it never calls is a supply chain question, not a feature
+# question, so it is left to `cargo vet` and the advisory database rather than
+# pinned here.
+
 # hybrid-array has no exact entry. Its feature set is decided by whoever depends
 # on it, ml-kem and ml-dsa among others, and each one turns on a different
 # combination. Pinning it would mean pinning the union of every upstream choice,
