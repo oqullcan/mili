@@ -127,8 +127,11 @@ with it.
 
 Named rather than left for a reader to find.
 
-- `libc` and `curve25519-dalek` are partly read. Both notes say which part.
-  `supply-chain/README.md` explains the reasoning.
+- `libc` and `curve25519-dalek` are partly read, and both notes state the stopping
+  point in reachability terms rather than line counts: mili reaches three `libc`
+  symbols and all three were read, and `curve25519-dalek` was audited by the
+  backend that executes rather than by file size. `supply-chain/README.md` has the
+  reasoning.
 - `mili-ffi` exports the formats in this table and no others. There is no PEM,
   no DER and no X.509, so the composite signature's assigned OID is not used.
 - A `cargo test` run takes about four minutes, mostly ML-KEM and ML-DSA per
@@ -179,9 +182,9 @@ twice at 0.11.0 and 0.12.0. The 40 remaining exemptions are all dev or build
 dependencies.
 
 Two of those notes are partial and say so in their own text: `libc` and
-`curve25519-dalek`. `supply-chain/README.md` names them, says which part was read
-and which was not, and explains why presenting a skim as an audit would be worse
-than recording the gap.
+`curve25519-dalek`. `supply-chain/README.md` states for each which part was read,
+which was not, and why that boundary is a checkable claim about reachability
+rather than a matter of how long the file is.
 
 ## The C ABI and the Go binding
 

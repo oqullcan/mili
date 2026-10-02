@@ -21,11 +21,23 @@ At the time of writing:
   `zerocopy`, the `syn`/`proc-macro2` pair for a dev-only proc macro,
   `windows-sys`, and similar.
 
-So the honest gap is no longer the production tree. It is volume. `libc` is 130k
-lines and `curve25519-dalek` is 35k, and neither has been read end to end. Their
-audit notes say so in the notes themselves, in the words "this is an exemption
-rather than a full audit" and "what was not read", rather than presenting a partial
-review as a finished one.
+So the honest gap is no longer the production tree. It is reachability inside two
+large crates, and it is worth being precise about that rather than quoting line
+counts, because line count was misleading in both directions.
+
+`libc` is 129k lines and mili reaches three symbols of it: `dlsym`,
+`RTLD_DEFAULT` and `getrandom`, all of them through `getrandom` and none of them
+referenced by mili directly. Every one of those three declarations was read.
+What the note does not cover is the signature tables for platforms mili does not
+build for, which is a different statement from "130k lines are unreviewed" and a
+stronger one to lean on.
+
+`curve25519-dalek` is 35k lines, and the first question there is which backend
+runs rather than how big the files are. On x86-64 the build selects `simd`, which
+is the 2749-line AVX2 backend; the 8874-line serial backend is compiled but not
+selected, and the 3247-line `ifma` backend is not compiled at all. The audit is
+organised by that, so it covers the field arithmetic that executes and names the
+rest as not read.
 
 ## The production tree
 
@@ -73,32 +85,42 @@ dependency of the crate using it rather than a build dependency, which is why
 
 ## Partial reviews, named as partial
 
-Two notes are partial and say so:
+Two notes are partial, and what each one leaves out is stated in reachability terms
+rather than in line counts:
 
-- `curve25519-dalek`: the build script, the `#[unsafe_target_feature]` surface, the
-  Montgomery ladder's constant time property, and one constant checked against an
-  independent derivation of the field prime. Not read: the field arithmetic, the
-  scalar arithmetic, the AVX2 and IFMA backends.
-- `libc`: the build script and the shape of the unsafe, which is FFI declarations
-  and `unsafe impl Send`/`Sync` for opaque platform handles. Not read: the
-  per-platform signature tables.
+- `curve25519-dalek`: the build script, the AVX2 field arithmetic that actually
+  executes on x86-64, the constant-time versus variable-time split in the scalar
+  multiplication, both paths mili takes, and one constant checked against an
+  independent derivation of the field prime. Not read: the `ifma` backend, which
+  does not compile on this target; the serial `u64` backend, which is compiled
+  but not selected on an AVX2 host; and the multi-scalar kernels mili does not
+  reach.
+- `libc`: the build script, the shape of the unsafe, and all three symbols mili
+  reaches. Not read: the signature tables for platforms mili does not build for.
 
 `curve25519-dalek-derive` and `rustc_version` are complete for what they are: a
 proc macro that emits one attribute, and a crate that runs `$RUSTC -vV`.
 
 ## Why partial reviews are recorded at all
 
-Auditing `libc` and `curve25519-dalek` properly is a multi-day job that a security
-auditor does over weeks. Doing it badly, by skimming and writing "looks fine", is
-worse than not doing it, because it puts a signature on the work that says someone
-checked. So the compromise here is a note that says exactly which part was read and
-which was not, and `cargo vet`'s own notion of criteria kept honest by the notes
-themselves.
+The temptation in both cases is to close the note by skimming the rest and
+writing "looks fine". That is worse than leaving the gap, because it signs the
+work as checked when it was not, and a reader of `cargo vet` has no way to tell
+the difference between an audit and a skim.
 
-`curve25519-dalek`'s note also records what was checked rather than skimmed: the
-`MINUS_ONE` field element was verified against a derivation of p-1 for p = 2^255-19
-in 51-bit limbs, because a file of 7781 lines of limb literals is the wrong thing to
-read line by line and the right thing to check one value of.
+So the stopping point has to be a defensible one rather than a comfortable one.
+For `libc` it is that three declarations are reachable and all three were read;
+for `curve25519-dalek` it is that the executing backend was read and the rest is
+not compiled in. Both are arguments about reachability that can be checked, which
+is a better answer than "there were 130k lines".
+
+There is also a test-side argument that belongs here rather than being left
+implicit. The AVX2 field arithmetic is not merely compiled, it is executed by
+mili's own suite: the 25 NIST ACVP ML-KEM-768 cases and the X-Wing draft vectors
+all run through `expand_key` and `decapsulate`, and the shared secrets agree with
+vectors generated by NIST's FIPS 204 reference implementation. That is evidence,
+not proof, and it is evidence about the paths those vectors reach rather than
+about the backend mili does not execute.
 
 ## Upstream audits
 

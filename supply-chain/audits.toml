@@ -402,45 +402,66 @@ criteria = "safe-to-deploy"
 version = "5.0.0"
 notes = """
 34619 lines, and this is the largest crate in the tree. It is exempted in the sense
-that a full audit was not performed; what follows is what was read, which is the
-build script, the unsafe surface, the constant time ladder and one checked
-constant. It is recorded as a partial review rather than folded into the count of
-completed ones, and `supply-chain/README.md` says so.
+that a full audit was not performed; what follows is what was read. It is recorded
+as a partial review rather than folded into the count of completed ones, and
+`supply-chain/README.md` says so.
 
-The build script is the part that had to be read, because `SPEC.md` section 16
-claims no build script in the tree reads the network, the clock or the environment
-to produce different output, and this is by far the largest build script here. It
-reads `CARGO_CFG_TARGET_FEATURE`, `CARGO_CFG_TARGET_ARCH`,
-`CARGO_CFG_TARGET_POINTER_WIDTH` and the two crate's own override variables, and
-writes `rustc-cfg` values. It does not create or write any file, so the 12,000
-lines of `constants.rs` across the four backends are committed rather than
-generated, which is worth knowing: there is no codegen step whose output could
-differ between two builds of the same commit.
+Which backend runs is the first question, because it decides what is worth
+reading, and the answer was not the obvious one. The build script writes
+`curve25519_dalek_bits="64"` and `curve25519_dalek_backend="simd"` on the machine
+this was written on, and the AVX-512 `ifma` backend is behind
+`cfg(curve25519_dalek_backend = "avx512")`, so it is not compiled at all. The
+serial `u64` backend is not selected either. `backend.rs::get_selected_backend`
+then picks between the compiled-in vector backends and serial by CPUID at run
+time, so the code that executes is `vector/avx2` on an AVX2 machine and
+`serial/u64` only on one without it.
 
-The only process it spawns is `rustc -vV`, through `rustc_version`, to learn the
-compiler version. That is the one exception to "no build script reads the
-environment", and it is recorded here rather than discovered later: the output of
-`rustc -vV` decides one cfg, and the crate gates the AVX-512 backend on a rustc
-version comparison. A hostile `rustc` would be a hostile build, not a hostile
+That inverts the obvious audit order. `backend/serial/u64` is 8874 lines and
+`vector/avx2` is 2749, and reading the serial backend first would be reading the
+code that does not run on a modern x86-64 host while skipping the code that does.
+What is recorded here is therefore organised by "does this execute under mili"
+rather than by file size.
+
+The build script reads `CARGO_CFG_TARGET_FEATURE`, `CARGO_CFG_TARGET_ARCH`,
+`CARGO_CFG_TARGET_POINTER_WIDTH` and the crate's own two override variables, and
+writes `rustc-cfg` values. It does not create or write any file, so the constant
+tables across the backends are committed rather than generated, which is worth
+knowing: there is no codegen step whose output could differ between two builds of
+the same commit. A capability it cannot satisfy for an explicitly requested
+backend is a `panic!` rather than a silent fallback.
+
+The only process it spawns is `rustc -vV`, through `rustc_version`. The output
+decides whether the AVX-512 backend is eligible, since that backend needs rustc
+1.89 or nightly. A hostile `rustc` would be a hostile build rather than a hostile
 dependency, and `SPEC.md` section 16's claim is about the former.
 
-The unsafe is 34 blocks in the AVX2 and IFMA vector backends, all behind
-`#[unsafe_target_feature]` attributes applied by the `curve25519_dalek_derive`
-proc macro. That macro is the thing worth naming: it applies `#[target_feature]`
-and, on old compilers, the `allow(unused_unsafe)` the crate wants. The `simd`
-backend selection in `build.rs` is compile-time gated on `is_capable_simd` and a
-capability it cannot satisfy is a `panic!` in the build script rather than a
-silent fallback, so a target that cannot support the requested backend fails the
-build.
+The AVX2 field arithmetic is the code that runs, and it was read.
+`FieldElement2625x4` is five radix-2^52 limbs packed four per `u32x8`, so eight
+lanes carry four elements at a time. The mask vector is
+`(2^26-1, 2^26-1, 2^25-1, 2^25-1)` repeated, which is two 2^26 halves plus one
+2^25 half per 64-bit element, and `2^26 * 2^26 * 2^26 * 2^26 * 2^25 = 2^129`,
+consistent with four 52-bit limbs and a 25-bit top limb. `reduce` propagates
+carryouts lane by lane through `rotated_carryout` and `combine`, and folds the
+overflow of the top limb back in by multiplying it by 19, which is the
+`2^255 = 19 mod p` step. `square` and the add and subtract helpers contain no
+branch on data; the `unsafe` blocks are intrinsic calls.
 
-The constant time property was checked in the Montgomery ladder, which is what
-X-Wing's X25519 half uses. `mul_bits_be` is a two point differential addition
-chain: for each bit it computes `conditional_swap` from `prev_bit ^ cur_bit` and
-then runs `differential_add_and_double`, with one unconditional `conditional_swap`
-after the loop. So the number of operations is fixed by the scalar's bit length
-and never by a secret bit, and the swap that would leak the bit is the same swap
-every iteration. `subtle`'s `conditional_select` is what makes each swap a mask
-rather than a branch.
+The split between constant-time and variable-time is structural rather than a
+convention, which is the property worth recording. `MultiscalarMul for Straus`
+at `backend/vector/scalar_mul/straus.rs:49` has no branch on a scalar digit,
+while `VartimeMultiscalarMul for Straus` in the same file matches on
+`Ordering` and adds or subtracts per digit. mili calls none of the variable-time
+entry points: `grep` for `vartime` across `mili-core` returns nothing, because a
+signature's scalar is secret and a variable-time ladder would leak it.
+
+The two paths mili actually takes were both read. Signing and key generation
+reach `variable_base.rs` and the constant-time `Straus`, 44 and 126 lines with no
+data-dependent branch. Verification reaches
+`vector/scalar_mul/vartime_double_base.rs`, 101 lines, one `unsafe`, computing
+`aA + bB` in variable time; its `for j in (0..256).rev()` loop breaks on the first
+non-zero NAF digit, and that branch is correct there because in Ed25519
+verification both `a` and `b` are public. Getting that wrong in either direction
+is the failure this split is designed to make visible.
 
 One constant was checked against an independent derivation rather than read: the
 `MINUS_ONE` field element in `backend/serial/u64/constants.rs`. That file is 7781
@@ -451,10 +472,22 @@ use of an audit. `MINUS_ONE` should be p-1 for p = 2^255-19 in 51-bit limbs, so
 so the limb representation and the field prime agree with the derivation rather
 than only with each other.
 
-What was not read: the field arithmetic in `backend/serial/u64/field.rs`, the
-scalar arithmetic, and the AVX2 and IFMA backends. Those are where a bug in this
-crate would live, and this audit does not claim otherwise. `cargo vet suggest`
-puts this crate in the backlog for that reason.
+What mili's own tests establish about this code, since it bears on how much the
+reading above is worth: the AVX2 path is not merely compiled, it is executed.
+`xwing_keygen_matches_the_draft`, `xwing_decapsulation_matches_the_draft` and the
+25 NIST ACVP ML-KEM-768 cases all call through `expand_key` and `decapsulate`,
+which reach the vector backends on this host. The NIST vectors were generated on
+FIPS 204 reference code and mili's own MAC and decapsulation agree with them, so
+a defect in the field arithmetic that those paths touch would have to be one the
+standard implementation shares. That is evidence, not proof, and it is evidence
+about the paths the vectors reach rather than about `ifma` or the serial fallback.
+
+What was not read: the `ifma` backend, 3247 lines, which does not compile on this
+target at all; `serial/u64`'s field and scalar arithmetic, 8874 lines, which is
+compiled but not selected on an AVX2 host; `packed_simd.rs`; and the remaining
+scalar multiplication kernels in `vector/scalar_mul`, which the crate's own
+`multiscalar_mul` and `pippenger` paths use and mili's do not reach. `cargo vet
+suggest` puts this crate in the backlog for the same reason.
 """
 
 [[audits.curve25519-dalek-derive]]
@@ -795,35 +828,53 @@ criteria = "safe-to-deploy"
 version = "0.2.189"
 notes = """
 129594 lines with 673 unsafe lines, and this is an exemption rather than a full
-audit. What was read is the build script and the shape of the unsafe, which is
-enough to state what the crate is.
+audit. The line count is the misleading part of this note, so it is dealt with
+first.
 
-`libc` is a declaration crate: it is FFI type and function signatures for the C
-standard library plus the platform-specific extras, and it contains no algorithms.
-The unsafe is almost entirely `unsafe extern "C" fn` declarations and `unsafe impl
-Send`/`Sync` for opaque platform handles such as `DIR`, `FILE` and sockets. Those
-manual `Sync` impls are the standard and necessary pattern for a type that is only
-safe to use behind the C library's own locking, and they are attached to the handle
-types the platform docs describe as thread-safe.
+`libc` is a declaration crate: FFI type and function signatures for the C standard
+library plus platform extras, and it contains no algorithms. Almost none of the
+129k lines are compiled into mili. The crate is gated per target and per feature,
+and what mili actually reaches is three symbols.
 
-The build script is 393 lines and does not write any file: no `File::create`, no
-`fs::write`, no `OUT_DIR`. What it does write are `rustc-cfg` values derived from
-`CARGO_CFG_TARGET_ENV`, `CARGO_CFG_TARGET_OS`, `CARGO_CFG_TARGET_POINTER_WIDTH` and
-`CARGO_CFG_TARGET_ARCH`, which is the same class of decision `curve25519-dalek` and
-`chacha20` make. It calls `rustc --version` to get a minor version, via the same
-`rustc_version_cmd` helper, which is the second crate in the tree that shells out
-and is the same argument as in the `rustc_version` audit: cargo sets the compiler,
-so this is the compiler's own trust boundary rather than a new one.
+mili does not reference `libc` at all: `grep` for `libc::` across `mili-core` and
+`mili-ffi` returns nothing. It reaches `libc` transitively through `getrandom`
+0.4.3, whose Linux backend uses exactly `libc::dlsym`, `libc::RTLD_DEFAULT` and
+`libc::getrandom`, with `dlsym` resolving the symbol when the static link does not
+provide it. `cargo tree -i libc` confirms the only production path is
+`getrandom -> crypto-common -> aead/chacha20poly1305 -> mili-core`.
 
-`SPEC.md` section 16's claim about build scripts should be read with this one in
-mind: two crates in the tree run a compiler version command, and neither writes a
-generated file. mili reaches `libc` only through `getrandom`, for the OS entropy
-entry point, so the production surface is a small fraction of the 129k lines and
-none of it is an algorithm.
+Those three are checked. `dlsym` is declared at `src/unix/mod.rs:1448` as
+`unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void`,
+`getrandom` at `src/unix/linux_like/linux/gnu/mod.rs:1064` as
+`(*mut c_void, size_t, c_uint) -> ssize_t`, and `RTLD_DEFAULT` is a pointer-sized
+constant rather than a call. So the production surface is three declarations whose
+failure mode is an ABI mismatch, and a wrong signature there is a compile error
+rather than a logic bug.
 
-What was not read: the per-platform signature tables. A wrong signature would be a
-compiler error or an ABI mismatch rather than a logic bug, and this audit makes no
-claim beyond the build script and the unsafe shape.
+The unsafe shape is the other thing worth recording, since 673 lines of it is
+what makes this crate look alarming. It is almost entirely `unsafe extern "C" fn`
+declarations and `unsafe impl Send`/`Sync` for opaque platform handles such as
+`DIR`, `FILE` and sockets. Those manual `Sync` impls are the standard and
+necessary pattern for a type that is only safe to use behind the C library's own
+locking, and they are attached to the handle types the platform docs describe as
+thread-safe.
+
+The build script is 393 lines and writes no file: no `File::create`, no
+`fs::write`, no `OUT_DIR`. What it writes are `rustc-cfg` values derived from
+`CARGO_CFG_TARGET_ENV`, `CARGO_CFG_TARGET_OS`, `CARGO_CFG_TARGET_POINTER_WIDTH`
+and `CARGO_CFG_TARGET_ARCH`, the same class of decision `curve25519-dalek` and
+`chacha20` make. It calls `rustc --version` through a `rustc_version_cmd` helper,
+which makes it the second crate in the tree that shells out and the same argument
+as in the `rustc_version` audit: cargo sets the compiler, so this is the compiler's
+own trust boundary rather than a new one. `SPEC.md` section 16's build script
+claim should be read with that in mind.
+
+What was not read: the per-platform signature tables for every other platform, and
+the non-Linux backends. That is a deliberate stopping point rather than an
+oversight, and it rests on the three-symbol argument above: the rest of the crate
+is not reachable from mili, and the part that is reachable has been checked down
+to its declaration. A defect in a platform mili does not build for cannot be
+reached by mili, which is a stronger statement than "would be hard to find".
 """
 
 [[audits.ml-dsa]]

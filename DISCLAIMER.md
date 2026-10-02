@@ -35,11 +35,18 @@ say in their own text that they are partial.
 | `curve25519-dalek` | none found | **partly** |
 | `libc` | none found | **partly** |
 
-The two partial ones are `curve25519-dalek` and `libc`. Their notes say which part
-was read and which was not, and `supply-chain/README.md` says the same thing a
-second time. `libc` is 130k lines of FFI declarations and `curve25519-dalek` is
-35k lines of field arithmetic, so reading either end to end is a separate piece of
-work that has not been done.
+The two partial ones are `curve25519-dalek` and `libc`. What each note leaves
+out is stated as unreachability rather than as unread pages: mili references no
+`libc` symbol directly and reaches exactly three of them through `getrandom`, all
+three read, with the platforms mili does not build for unreachable; and
+`curve25519-dalek` is audited by the AVX2 backend that executes on x86-64 rather
+than by file size, leaving the `ifma` backend uncompiled and the serial backend
+unselected. `supply-chain/README.md` says the same thing a second time.
+
+Line counts are a poor guide here in both directions. `libc` is 129k lines and
+almost none of them are compiled into mili. `curve25519-dalek` is 35k lines, of
+which the part that runs on a modern x86-64 host is the 2749-line AVX2 backend
+rather than the 8874-line serial one.
 
 Two algorithms in mili's suite are specified in internet-drafts, not RFCs:
 X-Wing (`draft-connolly-cfrg-xwing-kem`) and the composite signature

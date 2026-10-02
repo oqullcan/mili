@@ -201,9 +201,9 @@ third-party audit that mili found.
 
 What mili has instead is its own reading of each crate, recorded in
 `supply-chain/audits.toml`. That is a weaker statement than an independent audit
-and is not offered as one; `DISCLAIMER.md` section 3 says the same. The part of
-the tree that remains partly unread is named there: `libc` and
-`curve25519-dalek`.
+and is not offered as one; `DISCLAIMER.md` section 3 says the same. Two notes are
+partial, `libc` and `curve25519-dalek`, and both state their stopping point as
+something checkable: code mili cannot reach, rather than pages nobody got to.
 
 Known incidents recorded in this repository:
 
