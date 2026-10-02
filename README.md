@@ -24,6 +24,7 @@ The short version:
 - `docs/SPEC.md` — the wire formats, key hierarchy and key schedules
 - `docs/THREAT_MODEL.md` — what is mitigated, what is partial, what is out of scope
 - `docs/DISCLAIMER.md` — what mili does not do, and the words mili does not use
+- `docs/CLI.md` — why there is no CLI, and what one would have to get right
 - `SECURITY.md` — what to report, and what is already a documented position
 - `CONTRIBUTING.md` — the checks, and the four failures that have broken CI
 
@@ -80,16 +81,17 @@ fuzz/                cargo-fuzz targets, one per parser, outside the workspace
 Policy and provenance. The tools are pinned and the notes say what was read:
 
 ```
-docs/                the format, the threat model, the disclaimer, the signing keys
+docs/                the format, the threat model, the disclaimer, the CLI notes
 supply-chain/        cargo-vet configuration, audit notes and what they do not say
 tests/vectors/       known answer and NIST ACVP test vectors, read at compile time
 .github/workflows/   CI, third-party actions pinned by commit SHA
 ```
 
-`docs/README.md` is an index rather than a document: it says which of the four
+`docs/README.md` is an index rather than a document: it says which of the five
 belongs to a reader who wants to use mili, one who is assessing it, one who is
-contributing, and one who is verifying a release. `README.md` and `SECURITY.md`
-stay at the root because that is where GitHub looks for them.
+considering a CLI, one who is contributing, and one who is verifying a release.
+`README.md` and `SECURITY.md` stay at the root because that is where GitHub looks
+for them.
 
 Build configuration, one file per tool:
 
