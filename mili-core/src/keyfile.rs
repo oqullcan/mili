@@ -240,7 +240,18 @@ impl KeyFile {
     /// mili writes, cost parameters outside the accepted range, an empty
     /// password, an allocation failure, and a payload that does not
     /// authenticate. A wrong password and a corrupted file are the same error.
-    pub(crate) fn open_payload(&self, password: &[u8]) -> Result<(u8, SecretBytes<64>), Error> {
+    /// Returns the payload type, the payload's real length, and the payload
+    /// itself zero-padded to 64 bytes.
+    ///
+    /// The length is separate because the padding is indistinguishable from real
+    /// zero bytes: a payload of sixteen bytes and a payload of thirty two bytes
+    /// whose last sixteen are zero are the same 64 byte buffer afterwards. A
+    /// caller checking a payload against a size its type implies must compare
+    /// the second element, never the buffer's length.
+    pub(crate) fn open_payload(
+        &self,
+        password: &[u8],
+    ) -> Result<(u8, usize, SecretBytes<64>), Error> {
         check_password(password)?;
         let header = Header::parse(&self.0)?;
         check_params(header.m_cost, header.t_cost, header.p_cost)?;
@@ -266,7 +277,16 @@ impl KeyFile {
         }
         fixed[..payload.len()].copy_from_slice(&payload);
         payload.zeroize();
-        Ok((header.payload_type, SecretBytes::from_bytes(fixed)))
+        // The padded length is returned alongside, because the padding is
+        // indistinguishable from real zero bytes once written into a 64 byte
+        // array. A caller that needs to know whether a payload really is the
+        // size its type implies has to compare against this, not against the
+        // buffer's length, which is always 64.
+        Ok((
+            header.payload_type,
+            header.payload_len,
+            SecretBytes::from_bytes(fixed),
+        ))
     }
 
     /// Reports which kind of key this file holds, without a password.
@@ -294,8 +314,8 @@ impl KeyFile {
     /// is not [`PAYLOAD_SEALING`] or the length is not
     /// [`crate::SEALING_KEY_SIZE`].
     pub fn open_sealing_key(&self, password: &[u8]) -> Result<SealingKey, Error> {
-        let (payload_type, payload) = self.open_payload(password)?;
-        if payload_type != PAYLOAD_SEALING {
+        let (payload_type, payload_len, payload) = self.open_payload(password)?;
+        if payload_type != PAYLOAD_SEALING || payload_len != crate::SEALING_KEY_SIZE {
             return Err(Error::Failed);
         }
         let mut seed = [0u8; crate::SEALING_KEY_SIZE];
@@ -310,8 +330,8 @@ impl KeyFile {
     /// As `open_payload`, plus [`Error::Failed`] if the payload type
     /// is not [`PAYLOAD_SIGNING`] or the length is not [`SIGNING_KEY_SIZE`].
     pub fn open_signing_key(&self, password: &[u8]) -> Result<SigningKey, Error> {
-        let (payload_type, payload) = self.open_payload(password)?;
-        if payload_type != PAYLOAD_SIGNING {
+        let (payload_type, payload_len, payload) = self.open_payload(password)?;
+        if payload_type != PAYLOAD_SIGNING || payload_len != SIGNING_KEY_SIZE {
             return Err(Error::Failed);
         }
         let mut seed = [0u8; SIGNING_KEY_SIZE];
@@ -326,8 +346,8 @@ impl KeyFile {
     /// As `open_payload`, plus [`Error::Failed`] if the payload type
     /// is not [`PAYLOAD_SYMMETRIC`] or the length is not [`SYMMETRIC_KEY_SIZE`].
     pub fn open_symmetric_key(&self, password: &[u8]) -> Result<SymmetricKey, Error> {
-        let (payload_type, payload) = self.open_payload(password)?;
-        if payload_type != PAYLOAD_SYMMETRIC {
+        let (payload_type, payload_len, payload) = self.open_payload(password)?;
+        if payload_type != PAYLOAD_SYMMETRIC || payload_len != SYMMETRIC_KEY_SIZE {
             return Err(Error::Failed);
         }
         let mut seed = [0u8; SYMMETRIC_KEY_SIZE];
@@ -354,7 +374,7 @@ impl KeyFile {
     pub fn rotate(&self, password: &[u8]) -> Result<Self, Error> {
         let header = Header::parse(&self.0)?;
         check_params(header.m_cost, header.t_cost, header.p_cost)?;
-        let (payload_type, payload) = self.open_payload(password)?;
+        let (payload_type, _, payload) = self.open_payload(password)?;
 
         let file = seal_payload(
             payload_type,
@@ -725,7 +745,10 @@ mod tests {
         T_COST_OFFSET,
     };
     use crate::aead::TAG_SIZE;
-    use crate::{Error, SealingKey, SigningKey, SymmetricKey};
+    use crate::{
+        Error, SealingKey, SigningKey, SymmetricKey, SEALING_KEY_SIZE, SIGNING_KEY_SIZE,
+        SYMMETRIC_KEY_SIZE,
+    };
 
     // Argon2id at 64 MiB takes about 0.2 seconds on this machine, and each
     // open or wrap runs it once. The tests below are written to keep the number
@@ -1076,6 +1099,70 @@ mod tests {
             symmetric_file.open_signing_key(PASSWORD),
             Err(Error::Failed)
         ));
+    }
+
+    /// A payload whose length does not match its type is refused.
+    ///
+    /// `open_payload` zero-pads whatever it decrypts into a 64 byte buffer, and
+    /// each typed opener then copied its own size out of the front of that buffer
+    /// without checking how much of it was real. A file declaring `PAYLOAD_SEALING`
+    /// with a sixteen byte payload therefore opened successfully and produced a
+    /// `SealingKey` that was sixteen real bytes followed by sixteen zeros: a
+    /// well typed key that is not the key that was wrapped, with no error at any
+    /// layer. The doc comment on each opener already promised to reject this; the
+    /// check was missing.
+    ///
+    /// The payload is authenticated as associated data, so producing such a file
+    /// takes the password. That is why this is a correctness defect rather than a
+    /// remotely reachable one, and also why no fuzzer finds it: the fuzzer has no
+    /// password to construct a valid AEAD tag with.
+    #[test]
+    #[cfg(not(miri))]
+    fn a_payload_length_that_does_not_match_its_type_is_refused() {
+        for (payload_type, wrong_len) in [
+            (PAYLOAD_SEALING, SEALING_KEY_SIZE - 1),
+            (PAYLOAD_SEALING, 1),
+            (PAYLOAD_SEALING, 0),
+            (PAYLOAD_SIGNING, SIGNING_KEY_SIZE - 1),
+            (PAYLOAD_SIGNING, 1),
+            (PAYLOAD_SYMMETRIC, SYMMETRIC_KEY_SIZE - 1),
+            (PAYLOAD_SYMMETRIC, 0),
+        ] {
+            let file =
+                KeyFile::wrap(payload_type, &vec![0x5Au8; wrong_len], PASSWORD).expect("wrap");
+            let opened = match payload_type {
+                PAYLOAD_SEALING => file.open_sealing_key(PASSWORD).map(|_| ()),
+                PAYLOAD_SIGNING => file.open_signing_key(PASSWORD).map(|_| ()),
+                _ => file.open_symmetric_key(PASSWORD).map(|_| ()),
+            };
+            assert!(
+                matches!(opened, Err(Error::Failed)),
+                "payload type {payload_type} with {wrong_len} bytes was accepted"
+            );
+        }
+    }
+
+    /// The matching length opens, so the check above is not simply refusing
+    /// everything.
+    #[test]
+    #[cfg(not(miri))]
+    fn the_matching_payload_length_still_opens() {
+        for (payload_type, len) in [
+            (PAYLOAD_SEALING, SEALING_KEY_SIZE),
+            (PAYLOAD_SIGNING, SIGNING_KEY_SIZE),
+            (PAYLOAD_SYMMETRIC, SYMMETRIC_KEY_SIZE),
+        ] {
+            let file = KeyFile::wrap(payload_type, &vec![0x5Au8; len], PASSWORD).expect("wrap");
+            let opened = match payload_type {
+                PAYLOAD_SEALING => file.open_sealing_key(PASSWORD).map(|_| ()),
+                PAYLOAD_SIGNING => file.open_signing_key(PASSWORD).map(|_| ()),
+                _ => file.open_symmetric_key(PASSWORD).map(|_| ()),
+            };
+            assert!(
+                opened.is_ok(),
+                "payload type {payload_type} at {len} bytes was refused"
+            );
+        }
     }
 
     #[test]

@@ -81,12 +81,15 @@ crate = "x-wing@0.1.0"
 exact = true
 allow = ["default", "getrandom", "zeroize"]
 
-# `alloc` is required for the allocating `Aead` API. mili turns the default
-# feature set off explicitly; it is empty for this crate anyway.
+# `alloc` is required for the allocating `Aead` API. `zeroize` is what gives
+# `ChaChaPoly1305` a `Drop` that overwrites the key: without it this crate holds
+# the AEAD key for all five mili formats and releases it to the allocator intact.
+# mili turns the default feature set off explicitly; it is empty for this crate
+# anyway.
 [[bans.features]]
 crate = "chacha20poly1305@0.11.0"
 exact = true
-allow = ["alloc"]
+allow = ["alloc", "zeroize"]
 
 # `alloc` is required for the allocating parts of the key API and for the
 # pkcs8 module being compiled out. mili turns the default feature set off

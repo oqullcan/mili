@@ -342,16 +342,17 @@ pub unsafe extern "C" fn mili_sealed_box_overhead(out: *mut Size) -> i32 {
 /// `out` must be writable for one [`Size`].
 #[no_mangle]
 pub unsafe extern "C" fn mili_stream_overhead(plaintext_len: Size, out: *mut Size) -> i32 {
-    // The chunk count is the ceiling division. `chunks` is at least one, because a
-    // zero length plaintext still writes a final chunk.
-    // A zero length plaintext still writes a final chunk, so this is a ceiling
-    // division plus one, saturating rather than wrapping for a length near
-    // `usize::MAX`.
-    let chunks = plaintext_len
-        .checked_div(mili_core::stream::CHUNK_SIZE)
-        .and_then(|full| full.checked_add(1))
-        .unwrap_or(usize::MAX);
-    let overhead = mili_core::stream::overhead_for_chunks(0, chunks);
+    // The chunk count is a ceiling division: a plaintext of one byte still
+    // occupies one chunk and one tag, and a plaintext of exactly one chunk's
+    // worth of bytes also occupies exactly one. Only an empty plaintext needs
+    // the special case, and it gets one chunk rather than zero. Rounding up is
+    // what makes the reported figure a sufficient buffer size for every length
+    // including one that is an exact multiple.
+    let chunks = match plaintext_len {
+        0 => 1,
+        n => n.div_ceil(mili_core::stream::CHUNK_SIZE),
+    };
+    let overhead = mili_core::stream::overhead_for(chunks);
     unsafe { report(overhead, out) }
 }
 
@@ -1030,8 +1031,17 @@ fn payload_of(key: &StoredKey) -> Vec<u8> {
 
 /// Decodes one `payload_type || key bytes` entry for [`mili_backup_create`].
 fn stored_key(entry: &[u8]) -> Result<StoredKey, i32> {
-    let (payload_type, bytes) = entry.split_at(1);
-    match payload_type[0] {
+    // `split_first` rather than `split_at(1)`: the latter panics on an empty
+    // slice, and a caller can produce one. `packed` will happily build a
+    // zero length slice from `key_count = 1, keys_len = [0]`, and the panic
+    // would be caught by `call` and reported as `MILI_INTERNAL`, which is
+    // defined as mili catching a panic its own claims say is unreachable.
+    // This is mili's own boundary panicking on caller input, so it is a caller
+    // error and is reported as one.
+    let Some((payload_type, bytes)) = entry.split_first() else {
+        return Err(MILI_FAILED);
+    };
+    match payload_type {
         0x01 => {
             let seed: [u8; mili_core::SEALING_KEY_SIZE] =
                 bytes.try_into().map_err(|_| MILI_FAILED)?;

@@ -321,6 +321,7 @@ fn parse_entries(region: &[u8], count: u32) -> Result<Vec<BackupEntry>, Error> {
     }
 
     let mut entries = Vec::with_capacity(count as usize);
+    let mut seen: Vec<[u8; KEY_ID_SIZE]> = Vec::with_capacity(count as usize);
     let mut offset = 0usize;
 
     for _ in 0..count {
@@ -343,6 +344,16 @@ fn parse_entries(region: &[u8], count: u32) -> Result<Vec<BackupEntry>, Error> {
 
         let mut key_id = [0u8; KEY_ID_SIZE];
         key_id.copy_from_slice(&region[id_start..id_end]);
+        // The same rule `from_keys` enforces when writing, enforced here when
+        // reading. A container written by any other implementation of this format
+        // could otherwise hold two entries under one identifier, and the
+        // identifier exists for exactly one purpose: to tell the entries apart
+        // and to detect a wrong backup. Making the rule write-side only would
+        // mean a caller got two entries back under one id and no signal.
+        if seen.contains(&key_id) {
+            return Err(Error::Failed);
+        }
+        seen.push(key_id);
         let entry_len = read_u32(region, id_end)? as usize;
 
         let payload_start = offset.checked_add(ENTRY_OVERHEAD).ok_or(Error::Failed)?;

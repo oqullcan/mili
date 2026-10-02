@@ -49,7 +49,7 @@ Mitigated by the key schedules in `SPEC.md` sections 4.1 and 5.2.
 
 Two files share an AEAD key only if they share the 32 byte `salt`, because the
 key is a HKDF-Expand of the salt. Within a stream file the nonce is a strictly
-increasing 88 bit counter, which cannot repeat before the file reaches 2^88
+increasing 64 bit counter, which cannot repeat before the file reaches 2^64
 chunks, at which point the writer returns `Error::Internal` rather than
 wrapping. The writer never transmits a nonce and the caller never sees one.
 
@@ -141,8 +141,14 @@ Mitigated by the code structure, the lint, the fuzz corpus and the test suite.
 ### 2.11 Secret material left in memory after use
 
 Secret byte arrays implement `Drop` and zeroize. `Debug` and `Display` are
-redacted. Comparison of secret values is constant time. Upstream crate secret
-types are enabled with their `zeroize` features. Mitigated in part by
+redacted. Comparison of secret values is constant time. Every upstream crate in
+the tree whose secret types have a `zeroize` feature has it enabled, including
+`chacha20poly1305`, which holds the AEAD key for all five formats. That one was
+missed until the production tree was audited: `x-wing`, `ml-dsa`, `ed25519-dalek`
+and `argon2` all had it and `chacha20poly1305` did not, so the AEAD key was
+released to the allocator without being overwritten. For a key file or a backup
+that key is `HKDF(Argon2id(password))`, so it would have outlived the file it
+decrypted and the password rotation meant to bury it. Mitigated in part by
 `zeroize` semantics.
 
 Residual: the `Hkdf` object returned by `hkdf` 0.13 holds an internal copy of
@@ -234,8 +240,12 @@ Partially mitigated by upstream claims, not by mili.
 
 Ed25519 and ML-DSA-65 are both unforgeable under their stated assumptions; a
 signature valid only if both verify is at least as strong as either. Both
-algorithms are assumed secure; neither has been shown otherwise. Partially
-mitigated by construction.
+algorithms are assumed secure; neither has been shown otherwise. A verifying key
+whose Ed25519 half is a small order point is refused at parse time with
+`is_weak`, because such a key accepts any transcript on that half and would
+reduce the composite to ML-DSA-65 alone without ever failing a verification.
+Verification uses `verify_strict` rather than `verify` as a second layer.
+Partially mitigated by construction.
 
 ### 3.6 Signature determinism
 

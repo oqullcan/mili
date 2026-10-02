@@ -17,10 +17,18 @@ separately and where the tag check is confirmed to happen before any plaintext i
 moved out.
 
 `AeadInOut::encrypt_in_place` panics on a full buffer per its own documentation,
-while the `_detached` forms return a `Result`. mili uses `AeadInOut` and the
-detached forms, and it sizes its buffers with `Buffer::<U16>::to_tag` rather than
-trusting a message length, so it cannot reach the panic by passing a buffer that is
-already full.
+while the `_detached` forms return a `Result`. mili uses only the in-place forms,
+not the detached ones: `aead.rs` calls `encrypt_in_place` and `decrypt_in_place`
+with a `Vec` whose capacity it sized itself as `plaintext_len + TAG_SIZE`, so it
+cannot reach that panic by handing over a full buffer. An earlier version of this
+note claimed mili used the detached forms and sized buffers with
+`Buffer::<U16>::to_tag`; neither was true, and both are corrected here because a
+note that describes a different API surface than the one in use is worse than no
+note when it is cited as evidence.
+
+The `zeroize` feature matters more than the API choice and was the reason this
+note was rewritten. mili enables it, and without it `ChaChaPoly1305`'s `Drop` is
+empty and the AEAD key is released to the allocator without being overwritten.
 
 Dependencies are `cipher`, `crypto-common`, `inout` and `subtle`.
 """
@@ -254,8 +262,8 @@ Two properties matter here and both are visible in the code:
   `SPEC.md` section 2.3 is where that discipline is argued. The crate is not where
   the guarantee comes from and does not claim it is.
 
-The 431 lines are almost entirely trait impls delegating to the two halves, both
-reviewed separately. Dependency is `aead`, `chacha20`, `poly1305` and `universal-hash`.
+Most of those lines are trait impls delegating to the two halves, both
+reviewed separately. Dependency is `aead`, `chacha20`, `poly1305`, `cipher` and `zeroize`.
 """
 
 [[audits.cipher]]

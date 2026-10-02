@@ -23,7 +23,11 @@ subtle = { version = "=2.6.1", default-features = false }
 hkdf = "=0.13.0"
 sha2 = { version = "=0.11.0", default-features = false }
 x-wing = { version = "=0.1.0", features = ["getrandom", "zeroize"] }
-chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc"] }
+# `zeroize` because this is the crate that holds the AEAD key for every format in
+# mili. Without it `ChaChaPoly1305`'s `Drop` is empty and the key is released to
+# the allocator without being overwritten, which for a key file or a backup is a
+# `HKDF(Argon2id(password))` that outlives the file it decrypts.
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "zeroize"] }
 hybrid-array = "=0.4.15"

@@ -354,3 +354,30 @@ func TestVerifyRejectsATruncatedSignature(t *testing.T) {
 		}
 	}
 }
+
+// A negative maximumPlaintext converts to a huge C.size_t, which mili-core
+// reads as "no bound", so -1 would silently remove the only defence a hostile
+// stream has. Rust and C cannot express the mistake; this layer can, so this
+// layer checks it.
+func TestOpenStreamRejectsNegativeMaximumPlaintext(t *testing.T) {
+	seed, err := GenerateSealingKey()
+	if err != nil {
+		t.Fatalf("GenerateSealingKey: %v", err)
+	}
+	stream, err := SealStream(seed, []byte("a message"))
+	if err != nil {
+		t.Fatalf("SealStream: %v", err)
+	}
+
+	for _, bound := range []int{-1, -1024} {
+		if _, err := OpenStream(stream, bound, seed); err == nil {
+			t.Errorf("OpenStream with maximumPlaintext %d was accepted", bound)
+		}
+	}
+
+	// Zero is legitimate and means "an empty message only", so it must reach the
+	// library and fail there rather than being refused here.
+	if _, err := OpenStream(stream, 0, seed); err == nil {
+		t.Error("OpenStream with maximumPlaintext 0 opened a non-empty stream")
+	}
+}

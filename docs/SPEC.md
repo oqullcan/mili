@@ -145,8 +145,8 @@ ofs  len  field
 
 ```
 len          field
-0..65552     ciphertext    ChaCha20-Poly1305 output for the chunk plaintext
-65552..65568 tag           16 byte Poly1305 tag
+0..65536     ciphertext    ChaCha20-Poly1305 output for the chunk plaintext
+65536..65552 tag           16 byte Poly1305 tag
 ```
 
 Every chunk is exactly 65552 bytes except the last, which is `plaintext_len + 16`
@@ -168,8 +168,8 @@ nonce_i     counter || final_flag                    12 bytes
 aad_i       header[0..1158] || counter || final_flag
 ```
 
-The counter is never transmitted and never wraps: reaching `2^88` chunks is an
-`Error::Internal`, not a wrap-around. Byte 11 of the nonce is the flag and is
+The counter is never transmitted and never wraps: the counter is a `u64`, so
+reaching `2^64` chunks is an `Error::Failed`, not a wrap-around. Byte 11 of the nonce is the flag and is
 never incremented.
 
 ### 5.3 Which flag a chunk carries
@@ -613,6 +613,11 @@ Both use STREAM with 64 KiB chunks and the same nonce structure.
 |----------|--------|---------|
 | Chunk size | 64 KiB | 64 KiB |
 | Chunk nonce | `counter_be(88) \|\| flag` | same |
+
+`counter_be(88)` is age's name for the encoding: the counter occupies an 88 bit
+field, of which mili uses 64 and leaves the top 24 bits zero. That matches age's
+framing while the counter itself is a `u64`, so the real bound is `2^64` chunks
+as section 5.2 says.
 | Chunk key | fixed payload key | fixed file key |
 | Associated data | none | `header \|\| counter \|\| flag` |
 | Header integrity | separate MAC key | header is the AEAD AAD of every chunk |

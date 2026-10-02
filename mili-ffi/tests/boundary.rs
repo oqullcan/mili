@@ -899,6 +899,12 @@ fn a_duplicate_entry_is_refused() {
 fn an_entry_of_the_wrong_length_is_refused() {
     // A sealing key entry that is not 32 bytes.
     assert_eq!(create_backup(&[vec![1u8, 2, 3, 4]]), Err(MILI_FAILED));
+    // A zero length entry. This one used to panic inside the boundary rather
+    // than being refused: `stored_key` called `split_at(1)` on an empty slice,
+    // which panics, and `call` reported that panic as MILI_INTERNAL. That is
+    // mili's own code panicking on caller input, so the code was wrong rather
+    // than the claim in docs/THREAT_MODEL.md section 5.9.
+    assert_eq!(create_backup(&[vec![]]), Err(MILI_FAILED));
     // An unknown payload type.
     assert_eq!(
         create_backup(&[vec![
@@ -1148,5 +1154,58 @@ fn the_boundary_returns_a_code_rather_than_a_pointer() {
         let mut value = 0usize;
         assert_eq!(unsafe { function(&mut value) }, MILI_OK);
         assert!(value > 0);
+    }
+}
+
+/// `mili_stream_overhead` must be the overhead, not the total.
+///
+/// It had no test asserting a specific value, and the two callers that use it
+/// both compute `plaintext_len + overhead`, so a function returning the total
+/// would have been asked for twice the bytes it needed and the over-allocation
+/// hid it. The values here are checked against what a sealed stream of each
+/// length actually occupies, which is the only assertion that can tell the two
+/// apart.
+#[test]
+fn mili_stream_overhead_is_the_overhead_and_not_the_total() {
+    const CHUNK: usize = 64 * 1024;
+    const TAG: usize = 16;
+    const HEADER: usize = 1158;
+
+    for len in [0usize, 1, CHUNK - 1, CHUNK, CHUNK + 1, 2 * CHUNK] {
+        let chunks = if len == 0 { 1 } else { len.div_ceil(CHUNK) };
+        let expected_overhead = HEADER + chunks * TAG;
+
+        let mut reported = 0usize;
+        assert_eq!(unsafe { mili_stream_overhead(len, &mut reported) }, MILI_OK);
+        assert_eq!(
+            reported, expected_overhead,
+            "mili_stream_overhead({len}) reported {reported}, expected the overhead {expected_overhead}"
+        );
+
+        // And the reported overhead must be enough: allocating exactly
+        // plaintext plus overhead has to be sufficient to seal it.
+        let seed = [7u8; 32];
+        let plaintext = vec![0xA5u8; len];
+        let mut out = vec![0u8; len + reported];
+        let mut written = 0usize;
+        assert_eq!(
+            unsafe {
+                mili_seal_stream(
+                    seed.as_ptr(),
+                    plaintext.as_ptr(),
+                    plaintext.len(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut written,
+                )
+            },
+            MILI_OK,
+            "a {len} byte plaintext did not fit in its own length plus the reported overhead"
+        );
+        assert_eq!(
+            written,
+            HEADER + len + chunks * TAG,
+            "the sealed length for {len} bytes is not header plus plaintext plus tags"
+        );
     }
 }

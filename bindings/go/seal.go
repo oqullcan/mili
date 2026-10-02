@@ -106,6 +106,14 @@ func OpenStream(stream []byte, maximumPlaintext int, keys ...SealingKey) ([]byte
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("mili: open needs at least one candidate key")
 	}
+	// A negative int converts to a huge C.size_t, which mili-core reads as "no
+	// bound at all", so -1 would silently remove the only defence a hostile
+	// stream has against exhausting memory. Rust takes a usize and cannot
+	// express this mistake; C takes a size_t and cannot either. This is the only
+	// layer where it is expressible, so this is the layer that checks it.
+	if maximumPlaintext < 0 {
+		return nil, fmt.Errorf("mili: maximumPlaintext must not be negative, got %d", maximumPlaintext)
+	}
 	for index, key := range keys {
 		if len(key) != SealingKeySize {
 			return nil, fmt.Errorf("mili: candidate %d is %d bytes, a sealing key is %d", index, len(key), SealingKeySize)

@@ -58,18 +58,35 @@ pub const ENCRYPTED_CHUNK_SIZE: usize = CHUNK_SIZE + TAG_SIZE;
 /// Length of the authenticated header: the common prefix and the KEM ciphertext.
 pub const HEADER_SIZE: usize = SALT_END + KEM_CIPHERTEXT_SIZE;
 
-/// Bytes a stream adds to a message of `n` plaintext bytes, for `n` in chunks
-/// `c`. Exposed so a caller can predict a file size without writing one.
+/// Bytes a stream of `n` plaintext bytes in `c` chunks occupies in total.
+///
+/// Exposed so a caller can predict a file size without writing one. Note the
+/// name: this is the **total**, not the overhead, so it includes `n` itself. The
+/// overhead alone is [`overhead_for`], which is the other quantity a caller
+/// sometimes wants and which was previously conflated with this one.
 ///
 /// Saturating, because this is a prediction and `usize::MAX` is the answer to a
 /// size nobody can write. It is `const fn` so a caller can size a buffer at
 /// compile time, and a wrapping result would be a smaller buffer than the caller
 /// asked for, which is worse than a large one.
 #[must_use]
-pub const fn overhead_for_chunks(plaintext_len: usize, chunks: usize) -> usize {
+pub const fn total_for_chunks(plaintext_len: usize, chunks: usize) -> usize {
     HEADER_SIZE
         .saturating_add(plaintext_len)
         .saturating_add(chunks.saturating_mul(TAG_SIZE))
+}
+
+/// Bytes a stream of `c` chunks adds to a plaintext, excluding the plaintext.
+///
+/// This is the same sum as [`total_for_chunks`] without the `plaintext_len`
+/// term, and it is the quantity to add to a plaintext length when sizing a
+/// buffer. A function named `overhead_for_chunks` used to return the total,
+/// which meant a caller reading the name and allocating `plaintext +
+/// overhead_for_chunks(...)` asked for roughly twice the bytes it needed, and a
+/// caller reading it as a total was short by a chunk.
+#[must_use]
+pub const fn overhead_for(chunks: usize) -> usize {
+    HEADER_SIZE.saturating_add(chunks.saturating_mul(TAG_SIZE))
 }
 
 /// The `final_flag` byte of a chunk that is not the last one.
@@ -552,8 +569,8 @@ impl<R: Read> Read for StreamReader<R> {
 #[cfg(test)]
 mod tests {
     use super::{
-        counter_bytes, nonce, overhead_for_chunks, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE, FINAL,
-        FORMAT_TYPE, HEADER_SIZE, NOT_FINAL,
+        counter_bytes, nonce, overhead_for, total_for_chunks, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE,
+        FINAL, FORMAT_TYPE, HEADER_SIZE, NOT_FINAL,
     };
     #[cfg(not(miri))]
     use super::{open_buffered, open_stream, seal_buffered, seal_stream};
@@ -607,8 +624,21 @@ mod tests {
         assert_eq!(ENCRYPTED_CHUNK_SIZE, 65552);
         assert_eq!(TAG_SIZE, 16);
         assert_eq!(HEADER_SIZE, 1158);
-        assert_eq!(overhead_for_chunks(10, 1), 1158 + 10 + 16);
-        assert_eq!(overhead_for_chunks(0, 1), 1158 + 16);
+        // The total includes the plaintext; the overhead does not. Both are
+        // asserted separately so the two functions cannot be swapped again.
+        assert_eq!(total_for_chunks(10, 1), 1158 + 10 + 16);
+        assert_eq!(total_for_chunks(0, 1), 1158 + 16);
+        assert_eq!(overhead_for(1), 1158 + 16);
+        assert_eq!(
+            overhead_for(1),
+            total_for_chunks(0, 1),
+            "the overhead of one chunk equals the total for an empty plaintext"
+        );
+        assert_eq!(
+            total_for_chunks(10, 1) - overhead_for(1),
+            10,
+            "the total minus the overhead is the plaintext"
+        );
     }
 
     #[test]
@@ -648,7 +678,7 @@ mod tests {
             };
             assert_eq!(
                 file.len(),
-                overhead_for_chunks(len, chunks),
+                total_for_chunks(len, chunks),
                 "length {len}: wrong file size"
             );
             assert_eq!(*decrypt(&file).expect("open"), plaintext, "length {len}");

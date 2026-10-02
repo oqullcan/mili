@@ -33,7 +33,7 @@
 //! costs, and it is the reason mili does not wrap signatures in the streaming
 //! format.
 
-use ed25519_dalek::{Signer as _, Verifier as _};
+use ed25519_dalek::Signer as _;
 use hybrid_array::Array;
 use ml_dsa::{
     EncodedSignature, EncodedVerifyingKey, KeyExport as _, KeyInit as _, MlDsa65,
@@ -212,8 +212,21 @@ impl VerifyingKey {
         }
         let mut fixed = [0u8; VERIFYING_KEY_SIZE];
         fixed.copy_from_slice(bytes);
-        ed25519_dalek::VerifyingKey::from_bytes(&split_verifying(&fixed).1)
+        let ed25519 = ed25519_dalek::VerifyingKey::from_bytes(&split_verifying(&fixed).1)
             .map_err(|_| Error::Failed)?;
+        // A decodable point is not necessarily a usable key. The identity point
+        // and the order eight torsion points decode fine and are of negligible
+        // order, so a composite whose Ed25519 half is one of them can be forged
+        // without any secret: the half accepts any transcript. That would reduce
+        // the composite to ML-DSA-65 alone, which is the degradation the
+        // construction exists to prevent, so the key is refused at parse time
+        // rather than at verification.
+        //
+        // `is_weak` is the upstream's own test for this and is what
+        // `verify_strict` would otherwise apply later.
+        if ed25519.is_weak() {
+            return Err(Error::Failed);
+        }
         Ok(Self(fixed))
     }
 
@@ -268,8 +281,13 @@ impl VerifyingKey {
         let ed25519_key =
             ed25519_dalek::VerifyingKey::from_bytes(&ed25519_public).map_err(|_| Error::Failed)?;
 
+        // `verify_strict` rather than `verify`, as defence in depth. `from_bytes`
+        // already refuses a small order key, so this path should never see one,
+        // but `verify` additionally accepts non-canonical `S` and `R` encodings
+        // in some positions and `verify_strict` does not. The cost is a table
+        // lookup per point, which is nothing next to ML-DSA-65.
         ed25519_key
-            .verify(&transcript, &ed25519_signature)
+            .verify_strict(&transcript, &ed25519_signature)
             .map_err(|_| Error::Failed)
     }
 }
@@ -738,6 +756,32 @@ mod tests {
             super::VerifyingKey::from_bytes(&bad_point),
             Err(Error::Failed)
         ));
+    }
+
+    /// A key that decodes is not the same as a key that is safe to verify with.
+    ///
+    /// The identity point `[1, 0, 0, ..., 0]` is a valid compressed Edwards
+    /// encoding, so it passes `VerifyingKey::from_bytes`. It is also of order one,
+    /// which means the Ed25519 half of a composite signed with it carries no
+    /// secrecy and no binding to a key at all: anyone can satisfy that half.
+    ///
+    /// This matters because `docs/THREAT_MODEL.md` section 3.5 and the module
+    /// comment both rest the guarantee on both halves verifying. A degenerate but
+    /// accepted key would silently reduce the composite to ML-DSA-65 alone, which
+    /// is exactly the degradation the construction exists to prevent.
+    #[test]
+    #[cfg(not(miri))]
+    fn a_small_order_ed25519_key_is_rejected() {
+        let key = key();
+        let mut bytes = key.verifying_key().to_bytes();
+        let offset = ML_DSA65_VERIFYING_KEY_SIZE;
+        bytes[offset..offset + ED25519_VERIFYING_KEY_SIZE].copy_from_slice(&[0u8; 32]);
+        // The identity point is [1, 0, ...], so the first byte is 1 and the rest 0.
+        bytes[offset] = 1;
+        assert!(
+            matches!(super::VerifyingKey::from_bytes(&bytes), Err(Error::Failed)),
+            "a small order Ed25519 verifying key was accepted"
+        );
     }
 
     #[test]
