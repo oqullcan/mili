@@ -12,38 +12,44 @@ inputs someone thought of. A fuzzer tries the ones nobody did.
 ```sh
 cargo install cargo-fuzz --version 0.13.2    # once
 rustup toolchain install nightly             # libFuzzer needs a nightly compiler
-rustup target add x86_64-unknown-linux-musl  # and cargo-fuzz builds for it
 cd fuzz
 
-cargo +nightly fuzz run open_backup
-cargo +nightly fuzz run open_key_file corpus/open_key_file
-cargo +nightly fuzz tui open_stream      # if you have a terminal
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_key_file corpus/open_key_file
+cargo +nightly fuzz tui --target x86_64-unknown-linux-gnu open_stream   # if you have a terminal
 ```
 
-The musl target is not optional on a bare machine. `cargo-fuzz` passes
-`--target x86_64-unknown-linux-musl` because ASan wants a statically linked
-binary, and without the target installed the build fails on its first
-dependency with `sanitizer is incompatible with statically linked libc`
-followed by `can't find crate for 'core'`. Neither message names the missing
-target, and the whole thing passes on a machine that happens to have it, so
-check it before concluding that a fuzz job works.
+`--target` is not optional and the default is not reliable. ASan is incompatible
+with musl's static linking, so if anything has made `x86_64-unknown-linux-musl`
+the default for your nightly, the build fails on its first dependency with
+`sanitizer is incompatible with statically linked libc`. The usual way that
+happens is `rustup toolchain install nightly --target x86_64-unknown-linux-musl`,
+which installs a non-host target with `--force-non-host` and therefore changes the
+default. Naming the host target explicitly is the fix, and it also means the
+build does not depend on which targets happen to be installed.
 
-The versions above are the ones this repository is developed against. An
+The cargo-fuzz version above is the one this repository is developed against. An
 unpinned `cargo install cargo-fuzz` resolves to a different major version whose
-target selection and flags differ, and that shows up as a build failure rather
+flags and target selection differ, and that surfaces as a build failure rather
 than as a version message. See `SPEC.md` section 16.
 
 A crash lands in `fuzz/artifacts/<target>/` and is replayed with:
 
 ```sh
-cargo +nightly fuzz run open_backup artifacts/open_backup/crash-<hash>
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup artifacts/open_backup/crash-<hash>
 ```
 
-Replay the committed regressions without fuzzing:
+Replay the committed regressions without fuzzing. Pass the files, not the
+directory:
 
 ```sh
-cargo +nightly fuzz run open_backup regressions/open_backup
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup regressions/open_backup/*.bin
 ```
+
+A directory argument means "use this as the corpus and keep fuzzing", so
+replaying by directory runs forever instead of stopping. A file argument makes
+libFuzzer execute that input and exit, which is what a regression check wants.
+This is what CI does, and the glob is the part that matters.
 
 The crate is deliberately outside the workspace, listed under `exclude` in the
 root `Cargo.toml`. `cargo fuzz` builds every target with sanitizer flags that

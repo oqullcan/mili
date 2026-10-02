@@ -151,8 +151,8 @@ cargo vet check
 
 cd fuzz
 cargo deny check
-cargo +nightly fuzz build
-cargo +nightly fuzz run open_backup regressions/open_backup
+cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup regressions/open_backup/*.bin
 
 cd ../..
 cargo build --locked --release -p mili-ffi
