@@ -2,7 +2,7 @@
 //!
 //! This is the `mili-stream-v1` format: the STREAM construction with 64 KiB
 //! chunks, a 16 byte Poly1305 tag per chunk, and an explicit final chunk flag.
-//! `SPEC.md` section 5 has the layout and the key schedule byte by byte.
+//! `docs/SPEC.md` section 5 has the layout and the key schedule byte by byte.
 //!
 //! # What the reader enforces
 //!
@@ -27,7 +27,7 @@
 //! [`StreamReader`] exposes that behaviour because files do not fit in memory.
 //! [`open_buffered`] does not: it returns plaintext only after the final chunk
 //! authenticates, at the cost of holding the whole message. Read
-//! `THREAT_MODEL.md` section 3.2 before choosing.
+//! `docs/THREAT_MODEL.md` section 3.2 before choosing.
 //!
 //! # What the writer never does
 //!
@@ -506,7 +506,7 @@ impl<R: Read> Read for StreamReader<R> {
     /// or the counter would wrap.
     ///
     /// A failure after some plaintext has already been returned is possible and
-    /// is why `THREAT_MODEL.md` section 3.2 says to discard everything on error.
+    /// is why `docs/THREAT_MODEL.md` section 3.2 says to discard everything on error.
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         loop {
             if self.position < self.buffer.len() {

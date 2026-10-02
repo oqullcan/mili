@@ -652,7 +652,7 @@ schedule.
 | `cargo-fuzz` targets, one per parser | panic freedom and the format invariants each target states | - | 6 |
 
 The Argon2id row is "-" because the RFC's own vectors turned out to be
-unreachable through the API mili calls; `tests/vectors/README.md` records why and
+unreachable through the API mili calls; `../tests/vectors/README.md` records why and
 what is pinned in their place.
 
 Where a Wycheproof or ACVP file has no Rust-side runner, the vectors are
@@ -683,13 +683,13 @@ asserts that rather than leaving the duplication to look accidental.
 
 A build is reproducible from the repository alone when the following hold:
 
-- `rust-toolchain.toml` pins one exact stable channel. The CI workflow fails if
+- `../rust-toolchain.toml` pins one exact stable channel. The CI workflow fails if
   the toolchain it built with does not match the pin, so the two cannot drift.
-- `Cargo.lock` is committed and every cargo invocation uses `--locked`.
-- Every dependency version is written as `=x.y.z` in `Cargo.toml`. Caret
+- `../Cargo.lock` is committed and every cargo invocation uses `--locked`.
+- Every dependency version is written as `=x.y.z` in `../Cargo.toml`. Caret
   requirements are not used, so adding a dependency is always an explicit edit.
 - No build script in the dependency tree reads the network or the clock. Three
-  crates in the tree have build scripts, and `supply-chain/audits.toml` records
+  crates in the tree have build scripts, and `../supply-chain/audits.toml` records
   what each one does:
   - `getrandom` is eleven lines. It reads `CARGO_CFG_SANITIZE` and sets one cfg so
     MemorySanitizer can unpoison its output.
@@ -708,11 +708,11 @@ A build is reproducible from the repository alone when the following hold:
 
   `cargo deny` checks that a crate is allowed at all, and `cargo vet` records
   whether anyone has read the code. Every crate on a production edge in
-  `Cargo.lock` now has an audit written here by reading its source, with the two
+  `../Cargo.lock` now has an audit written here by reading its source, with the two
   partial reviews named as partial in the notes themselves. The remaining
   exemptions are all dev-dependencies or build-dependencies. What
   `cargo vet check` passing does and does not mean is recorded in
-  `supply-chain/README.md`.
+  `../supply-chain/README.md`.
 
 mili does not claim bit-reproducible output across toolchain versions. A
 different rustc version, a different `target-cpu` or a different linker will
@@ -753,7 +753,7 @@ that contains `unsafe` code; `mili-core` is `#![forbid(unsafe_code)]` and stays
 that way, which is the reason the crate exists.
 
 This section is normative for the boundary's shape. The functions are declared in
-`mili-ffi/include/mili.h`, which is hand written and checked against the exported
+`../mili-ffi/include/mili.h`, which is hand written and checked against the exported
 symbols by a test.
 
 ### 18.1 Rules

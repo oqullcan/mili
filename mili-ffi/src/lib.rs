@@ -48,13 +48,13 @@
 //! 6. **Nothing here is negotiated, configured or reordered.** One suite per format
 //!    version, exactly as `mili-core`. No function in this crate selects an
 //!    algorithm, reads an environment variable, or takes a parameter the
-//!    corresponding part of `SPEC.md` does not define.
+//!    corresponding part of `docs/SPEC.md` does not define.
 //!
 //! # What the boundary does not do
 //!
 //! It does not clear the caller's memory. A key that `mili_sealing_key_to_bytes`
 //! writes is in a Go slice that the garbage collector will copy and that nothing
-//! will zero. That is the caller's to handle, `DISCLAIMER.md` records it, and no
+//! will zero. That is the caller's to handle, `docs/DISCLAIMER.md` records it, and no
 //! function here pretends otherwise.
 //!
 //! # Sizes
@@ -542,7 +542,7 @@ pub unsafe extern "C" fn mili_sign(
 /// Verifies a composite signature.
 ///
 /// Verifies only if both component signatures verify for the same message, as
-/// `SPEC.md` section 6 requires. `verifying` is a public key and may be shared
+/// `docs/SPEC.md` section 6 requires. `verifying` is a public key and may be shared
 /// freely.
 ///
 /// # Safety
@@ -649,7 +649,7 @@ pub unsafe extern "C" fn mili_open_stream(
         // A `Cursor` over the caller's bytes, so no reader crosses the boundary and
         // no partial read is possible. `maximum_plaintext_len` is the caller's bound
         // on how much plaintext it is willing to accept from a hostile file, which
-        // is the only defence `SPEC.md` section 5.7 leaves for a stream.
+        // is the only defence `docs/SPEC.md` section 5.7 leaves for a stream.
         let opened = mili(open_buffered(
             Cursor::new(file),
             &borrowed,
@@ -800,7 +800,7 @@ pub unsafe extern "C" fn mili_key_file_wrap_signing(
 /// Opens a key file under `password` and writes the seed it holds back out.
 ///
 /// `expected` is the `payload_type` the caller expects, one of the three values
-/// `SPEC.md` section 7 writes. It is an argument rather than something inferred from
+/// `docs/SPEC.md` section 7 writes. It is an argument rather than something inferred from
 /// the output buffer for a reason: a signing key file asked for as a sealing key
 /// produces 64 bytes where the caller allocated 32, which the first version of this
 /// function reported as a buffer problem, and 32 bytes where the caller allocated 64,
@@ -862,7 +862,7 @@ pub unsafe extern "C" fn mili_key_file_unwrap(
 
 /// Reports which kind of key a key file holds, without a password.
 ///
-/// Returns the same values `SPEC.md` section 7 writes in `payload_type`: 1 sealing,
+/// Returns the same values `docs/SPEC.md` section 7 writes in `payload_type`: 1 sealing,
 /// 2 signing, 3 symmetric. Reporting it does not authenticate the file: any bytes
 /// have a payload type at a fixed offset, so a caller that treats this as proof of
 /// anything is wrong. It is for a caller deciding which of its keys to try.
@@ -887,7 +887,7 @@ pub unsafe extern "C" fn mili_key_file_payload_type(
 
 /// Rewrites a key file under the same password with a fresh salt.
 ///
-/// `SPEC.md` section 12.1 defines rotation as a new salt around the same payload
+/// `docs/SPEC.md` section 12.1 defines rotation as a new salt around the same payload
 /// under the same parameters. Changing the password is not rotation: it is opening
 /// the key and wrapping it again, which the caller can do with
 /// [`mili_key_file_unwrap`] and [`mili_key_file_wrap_sealing`].
@@ -924,7 +924,7 @@ pub unsafe extern "C" fn mili_key_file_rotate(
 ///
 /// `keys` is `key_count` entries back to back, each preceded by its length as a
 /// [`Size`], which is what `keys_len` describes. The first byte of each key entry
-/// is its `payload_type`, as `SPEC.md` section 8 writes it, so that a container
+/// is its `payload_type`, as `docs/SPEC.md` section 8 writes it, so that a container
 /// built here holds the same entries one built through `mili-core` holds.
 ///
 /// Two entries with the same identifier are refused.
@@ -1006,7 +1006,7 @@ pub unsafe extern "C" fn mili_backup_open(
 
 /// Encodes one stored key as `payload_type || key bytes`.
 ///
-/// The type values are the ones `SPEC.md` section 8 writes, and they are also the
+/// The type values are the ones `docs/SPEC.md` section 8 writes, and they are also the
 /// ones `KeyFile::payload_type` reports, so a caller that has a key from either
 /// direction can tell what it has.
 fn payload_of(key: &StoredKey) -> Vec<u8> {

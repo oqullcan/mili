@@ -4,7 +4,7 @@
 //! buffer to a single X-Wing public key. For files larger than memory, use the
 //! streaming format added in a later phase.
 //!
-//! The layout is fixed and documented byte by byte in `SPEC.md` section 4:
+//! The layout is fixed and documented byte by byte in `docs/SPEC.md` section 4:
 //!
 //! ```text
 //! ofs  len  field
@@ -23,7 +23,7 @@
 //! because the only key-dependent bytes in the file are the KEM ciphertext and
 //! the ciphertext itself, and the KEM ciphertext is fresh randomness on every
 //! call. `open` therefore takes a list of candidate keys and tries them in
-//! order; see `SPEC.md` section 10.
+//! order; see `docs/SPEC.md` section 10.
 //!
 //! # Nonce
 //!

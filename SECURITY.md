@@ -20,12 +20,12 @@ crates. The interesting failures are the ones where mili's own choices are
 wrong, so these are in scope:
 
 - A parameter, a key schedule or a key hierarchy step that does not match
-  `SPEC.md`, or that `SPEC.md` documents wrongly.
+  `docs/SPEC.md`, or that `docs/SPEC.md` documents wrongly.
 - An authentication, key agreement or cryptographic parse failure that produces
   a distinguishable result — anything that breaks the uniformity claim in
-  `README.md` rule 4 or `THREAT_MODEL.md` section 3.
+  `README.md` rule 4 or `docs/THREAT_MODEL.md` section 3.
 - An attacker-controlled length, index or count that reaches an allocation or a
-  copy before it is bounded. `SPEC.md` section 6 requires every length to be
+  copy before it is bounded. `docs/SPEC.md` section 6 requires every length to be
   checked against a documented limit first.
 - A plaintext that is released before the data covering it has been
   authenticated, in `mili-core` or across the C ABI in `mili-ffi`.
@@ -41,10 +41,10 @@ These are documented positions, and a report that consists of one of them is a
 question rather than a defect:
 
 - Any algorithm, key size or parameter choice. mili selects parameters and does
-  not offer alternatives. `SPEC.md` section 2 is the argument for each one.
+  not offer alternatives. `docs/SPEC.md` section 2 is the argument for each one.
 - Absence of padding, cover traffic or fixed-size output.
-  `THREAT_MODEL.md` section 5.3 and 5.4 say so directly.
-- Anything in `THREAT_MODEL.md` section 5, which is the out-of-scope list:
+  `docs/THREAT_MODEL.md` section 5.3 and 5.4 say so directly.
+- Anything in `docs/THREAT_MODEL.md` section 5, which is the out-of-scope list:
   compromised host, coercion, traffic analysis, length hiding, and hardware side
   channels beyond what the upstream crates handle.
 - A defect in an upstream crate. Those are worth reporting upstream. If it
@@ -58,5 +58,5 @@ question rather than a defect:
 
 mili pins every dependency with `=` and treats a version change as an explicit
 edit, so a fix that requires one is expected to be argued rather than made
-quietly. `SPEC.md` section 16 records the reproducibility constraints that
+quietly. `docs/SPEC.md` section 16 records the reproducibility constraints that
 constrain the options.

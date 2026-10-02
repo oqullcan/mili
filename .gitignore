@@ -1,6 +1,21 @@
+# Build output.
 /target
 /fuzz/target
+
+# Fuzzing byproducts. `regressions/` is deliberately not ignored: an input that
+# found a defect is committed so CI can replay it.
 /fuzz/artifacts
 /fuzz/corpus
+
+# Profiling output from miri and from the sanitizer builds the fuzz targets use.
+*.profraw
+coverage/
+
+# Editor and OS droppings.
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Cargo writes this when it rewrites a lockfile; it is not the committed one.
 Cargo.lock.orig
-*.kdb

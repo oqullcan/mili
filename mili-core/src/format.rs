@@ -16,7 +16,7 @@
 //! parses its own fields after it. [`parse_with_salt`] is the sealed box and
 //! stream form; [`parse_fields`] is the key file form.
 //!
-//! `SPEC.md` section 2 is normative for the first six bytes.
+//! `docs/SPEC.md` section 2 is normative for the first six bytes.
 
 use crate::Error;
 

@@ -2,7 +2,7 @@
 //!
 //! This is the `MLDSA65-Ed25519-SHA512` construction of
 //! `draft-ietf-lamps-pq-composite-sigs`. That document is an IETF internet-draft,
-//! not an RFC. `SPEC.md` section 6 has the layout byte by byte.
+//! not an RFC. `docs/SPEC.md` section 6 has the layout byte by byte.
 //!
 //! Three properties are worth stating before the API.
 //!
@@ -860,7 +860,7 @@ mod tests {
         // but is not byte identical to the published one. The reference
         // implementation that produced the draft's vectors used randomised ML-DSA
         // signing, and mili uses the deterministic variant, so the two
-        // signatures differ while both being valid. See SPEC.md section 6.4.
+        // signatures differ while both being valid. See docs/SPEC.md section 6.4.
         let produced = signing.sign(message).expect("sign");
         assert_ne!(
             produced, file_bytes,

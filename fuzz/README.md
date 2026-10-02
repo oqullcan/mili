@@ -2,7 +2,7 @@
 
 `cargo-fuzz` targets for every parser in `mili-core`, one per format, plus one
 for signature verification. The claim they exist to support is
-`THREAT_MODEL.md` section 2.10: `mili-core` is `#![forbid(unsafe_code)]`, every
+`docs/THREAT_MODEL.md` section 2.10: `mili-core` is `#![forbid(unsafe_code)]`, every
 parse is length checked and fallible, and no library path panics. The unit and
 property tests cannot establish that on their own, because they only try the
 inputs someone thought of. A fuzzer tries the ones nobody did.
@@ -31,7 +31,7 @@ build does not depend on which targets happen to be installed.
 The cargo-fuzz version above is the one this repository is developed against. An
 unpinned `cargo install cargo-fuzz` resolves to a different major version whose
 flags and target selection differ, and that surfaces as a build failure rather
-than as a version message. See `SPEC.md` section 16.
+than as a version message. See `docs/SPEC.md` section 16.
 
 A crash lands in `fuzz/artifacts/<target>/` and is replayed with:
 
@@ -90,7 +90,7 @@ wrong error:
   must reach the same verdict twice; and rotation must produce a file that opens
   to the same key.
 - `open_backup` — the identifiers a container reports must be distinct, because
-  `SPEC.md` section 8 refuses a container holding two entries under one
+  `docs/SPEC.md` section 8 refuses a container holding two entries under one
   identifier; and the same bytes must reach the same verdict twice.
 - `verify_signature` — verification must be deterministic, and a signature that
   verified for a message must not verify for that message with one byte appended.
@@ -114,7 +114,7 @@ Measured on the machine this was written on, `-max_total_time=60`, no corpus:
 | `open_backup` | ~1,700 | |
 | `open_key_file` | ~19 | see below |
 
-`open_key_file` is slow because Argon2id runs. At the profile `SPEC.md` section
+`open_key_file` is slow because Argon2id runs. At the profile `docs/SPEC.md` section
 7.1 records, one derivation touches 64 MiB three times, so a target that reaches
 it runs at roughly eight executions a second. That is the honest cost of
 fuzzing a format whose parameters are attacker-chosen, and it is why the target

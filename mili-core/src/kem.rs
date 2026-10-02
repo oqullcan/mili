@@ -3,7 +3,7 @@
 //! X-Wing, which combines X25519 with ML-KEM-768 and combines the two shared
 //! secrets with SHA3-256. The specification is
 //! `draft-connolly-cfrg-xwing-kem`; it is an IETF internet-draft, not an RFC.
-//! See `SPEC.md` section 9.
+//! See `docs/SPEC.md` section 9.
 //!
 //! Two types, and they are the only key types that can be used here:
 //!
@@ -83,9 +83,9 @@ impl SealingKey {
     ///
     /// What the caller then owes: the bytes are in ordinary memory that Go's
     /// garbage collector will copy, that a `String` or a log line might pick up,
-    /// and that nothing will zero. Use a key file of `SPEC.md` section 7 or a
+    /// and that nothing will zero. Use a key file of `docs/SPEC.md` section 7 or a
     /// backup of section 8 for a key at rest, and treat a copy handed to a caller
-    /// as the caller's to clear. `DISCLAIMER.md` says what mili does not clear.
+    /// as the caller's to clear. `docs/DISCLAIMER.md` says what mili does not clear.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; SEALING_KEY_SIZE] {
         *self.expose()
@@ -265,7 +265,7 @@ mod tests {
 
     // NIST ACVP vectors for ML-KEM-768 itself, rather than through X-Wing.
     //
-    // `SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
+    // `docs/SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
     // proving insufficient, and this test is the answer to that condition. It is
     // here because the answer turned out to be yes, and the reasoning is recorded
     // in the vector file and in `tests/vectors/README.md`.
@@ -312,7 +312,7 @@ mod tests {
     /// rather than through mili's [`EncapsulationKey`], because mili's wraps
     /// X-Wing and cannot encapsulate against a bare ML-KEM key.
     ///
-    /// `SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
+    /// `docs/SPEC.md` section 15 makes these conditional on the X-Wing draft vectors
     /// proving insufficient. They are insufficient, and the reason is in the other
     /// test in this pair.
     #[test]

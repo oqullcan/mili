@@ -133,7 +133,7 @@ replays, and the lint is what stops the next one from needing a fuzzer.
 Fuzzing is not a proof, and a finite campaign is not a campaign. What the targets
 establish is narrower: they found one defect in roughly the time it took to write
 them, and the corpus makes that one finding permanent rather than leaving it in
-someone's terminal. See `fuzz/README.md` for what each target asserts and for the
+someone's terminal. See `../fuzz/README.md` for what each target asserts and for the
 throughput cost of fuzzing a format whose cost parameters come from the file.
 
 Mitigated by the code structure, the lint, the fuzz corpus and the test suite.
@@ -200,7 +200,7 @@ significant findings. `x-wing` 0.1.0, `ml-kem` 0.3.2, `ml-dsa` 0.1.1,
 third-party audit that mili found.
 
 What mili has instead is its own reading of each crate, recorded in
-`supply-chain/audits.toml`. That is a weaker statement than an independent audit
+`../supply-chain/audits.toml`. That is a weaker statement than an independent audit
 and is not offered as one; `DISCLAIMER.md` section 3 says the same. Two notes are
 partial, `libc` and `curve25519-dalek`, and both state their stopping point as
 something checkable: code mili cannot reach, rather than pages nobody got to.

@@ -15,7 +15,7 @@
 //! # Label set
 //!
 //! The set below is the complete mili-v1 set. Adding a purpose is a change to
-//! `SPEC.md` and a new variant; reusing an existing label is prevented by the
+//! `docs/SPEC.md` and a new variant; reusing an existing label is prevented by the
 //! test that asserts every label is distinct.
 //!
 //! | Variant | Label | Derived |
@@ -32,7 +32,7 @@
 //! does not implement `Zeroize`, so that copy is released without being
 //! overwritten. mili uses a single `Hkdf` value per derivation rather than
 //! materialising the pseudorandom key separately, which keeps the exposure to
-//! one copy. See `THREAT_MODEL.md` section 2.11.
+//! one copy. See `docs/THREAT_MODEL.md` section 2.11.
 
 use zeroize::{Zeroize, Zeroizing};
 

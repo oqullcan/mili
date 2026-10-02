@@ -32,7 +32,7 @@ acvp_mlkem768.json                 NIST ACVP, ML-KEM-768 encapsulation
 
 ## Why there is both an X-Wing and an ML-KEM file
 
-`SPEC.md` section 15 made ACVP vectors conditional: add them "if the X-Wing
+`docs/SPEC.md` section 15 made ACVP vectors conditional: add them "if the X-Wing
 vectors prove insufficient". They proved insufficient, so they are here, and the
 reason is worth recording because it is not obvious from the file list.
 
@@ -69,7 +69,7 @@ format, so that the test does not change when the upstream file does.
 
 ## Regenerating `mili_kdf_v1.json`
 
-Only if the label set in `SPEC.md` changes. The vectors are generated with an
+Only if the label set in `docs/SPEC.md` changes. The vectors are generated with an
 implementation of HKDF-SHA256 written from RFC 5869, not with mili, so that the
 test can fail if mili's derivation changes.
 

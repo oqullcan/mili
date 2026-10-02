@@ -2,7 +2,7 @@
 //!
 //! ChaCha20-Poly1305 (RFC 8439) with a 256 bit key and a 96 bit nonce. The nonce
 //! is never taken from a caller and never written to a wire format. Each format
-//! derives its own key and builds its own nonce, as `SPEC.md` describes:
+//! derives its own key and builds its own nonce, as `docs/SPEC.md` describes:
 //!
 //! - a sealed box uses a fixed all-zero nonce and a key derived from a random
 //!   per-file salt

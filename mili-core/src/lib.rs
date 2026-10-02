@@ -28,7 +28,7 @@
 //! [`open()`] decrypts it by trying a list of candidate [`SealingKey`] values. The
 //! file names no recipient and no key identifier, so an observer cannot tell
 //! which of a recipient's keys opened a file, or whether two files share a
-//! recipient at all. `SPEC.md` section 10 records that trade-off.
+//! recipient at all. `docs/SPEC.md` section 10 records that trade-off.
 //!
 //! ```
 //! use mili_core::{open, seal, SealingKey};
@@ -47,7 +47,7 @@
 //! the STREAM construction with 64 KiB chunks. Truncation, reordering, appending
 //! and single bit flips are all detected. [`stream::open_buffered`] is the form
 //! with no partial plaintext exposure, at the cost of holding the whole message.
-//! `SPEC.md` section 5 has the details.
+//! `docs/SPEC.md` section 5 has the details.
 //!
 //! ```
 //! use mili_core::stream::{open_buffered, seal_buffered};
@@ -65,7 +65,7 @@
 //! # What is not here yet
 //!
 //! Key files and the FFI are added in later phases, each under its own format
-//! version as specified in `SPEC.md`.
+//! version as specified in `docs/SPEC.md`.
 //!
 //! # Errors
 //!

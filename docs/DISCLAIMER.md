@@ -21,7 +21,7 @@ The primitives mili composes come from outside this repository.
 
 **No third party has audited mili, and this repository is not an audit of the
 crates below.** What mili has done is read each crate's source itself and record
-what was read, in `supply-chain/audits.toml`. Every crate on a production edge has
+what was read, in `../supply-chain/audits.toml`. Every crate on a production edge has
 one of those notes. That is not the same as an independent audit and it should not
 be quoted as one: nobody outside this repository looked, and the two largest notes
 say in their own text that they are partial.
@@ -35,18 +35,12 @@ say in their own text that they are partial.
 | `curve25519-dalek` | none found | **partly** |
 | `libc` | none found | **partly** |
 
-The two partial ones are `curve25519-dalek` and `libc`. What each note leaves
-out is stated as unreachability rather than as unread pages: mili references no
-`libc` symbol directly and reaches exactly three of them through `getrandom`, all
-three read, with the platforms mili does not build for unreachable; and
-`curve25519-dalek` is audited by the AVX2 backend that executes on x86-64 rather
-than by file size, leaving the `ifma` backend uncompiled and the serial backend
-unselected. `supply-chain/README.md` says the same thing a second time.
-
-Line counts are a poor guide here in both directions. `libc` is 129k lines and
-almost none of them are compiled into mili. `curve25519-dalek` is 35k lines, of
-which the part that runs on a modern x86-64 host is the 2749-line AVX2 backend
-rather than the 8874-line serial one.
+The two partial ones are `curve25519-dalek` and `libc`. Both state their
+stopping point as unreachability rather than as unread pages, and
+`../supply-chain/README.md` is where that argument is made in full, together
+with the line counts that do and do not mislead. What belongs here is only the
+conclusion: two of the tree's largest crates have been read in the part mili
+reaches and not in the part it cannot.
 
 Two algorithms in mili's suite are specified in internet-drafts, not RFCs:
 X-Wing (`draft-connolly-cfrg-xwing-kem`) and the composite signature

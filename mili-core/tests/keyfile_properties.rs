@@ -149,7 +149,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(6))]
 
     /// Rotation preserves the key, and writes different bytes, because
-    /// `SPEC.md` section 12.1 defines it as a fresh salt around the same payload
+    /// `docs/SPEC.md` section 12.1 defines it as a fresh salt around the same payload
     /// under the same password.
     #[test]
     fn rotation_preserves_the_key(password in prop::collection::vec(any::<u8>(), 1..48)) {
@@ -181,7 +181,7 @@ proptest! {
     /// Changing a key file's password is the composition of opening the key and
     /// wrapping it again, which is the only way to do it: `rotate` deliberately
     /// keeps the password, because that is what rotation means in
-    /// `SPEC.md` section 12.1.
+    /// `docs/SPEC.md` section 12.1.
     #[test]
     fn a_password_change_is_open_then_wrap(
         old in prop::collection::vec(any::<u8>(), 1..24),

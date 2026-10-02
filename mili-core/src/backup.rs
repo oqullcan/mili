@@ -1,14 +1,14 @@
 //! The backup container: the `mili-backup-v1` format.
 //!
-//! A backup holds several keys under one password. `SPEC.md` section 8 has the
+//! A backup holds several keys under one password. `docs/SPEC.md` section 8 has the
 //! layout.
 //!
 //! # Why this exists
 //!
 //! Losing a key is not something mili can detect: every failure returns the same
 //! error. The designed answer is that a key whose only copy is one key file has
-//! no recovery path, and this container is the alternative. `DISCLAIMER.md` says
-//! so in its operational notes, and `THREAT_MODEL.md` section 6 lists the key
+//! no recovery path, and this container is the alternative. `docs/DISCLAIMER.md` says
+//! so in its operational notes, and `docs/THREAT_MODEL.md` section 6 lists the key
 //! file as the asset whose loss ends every file encrypted under it.
 //!
 //! # What an entry holds
@@ -17,7 +17,7 @@
 //! is encrypted once, under a wrapping key derived from the container's password
 //! and Argon2 salt, so Argon2 runs exactly once for a backup of any size.
 //!
-//! An earlier draft of `SPEC.md` section 8 said an entry is "the bytes of the key
+//! An earlier draft of `docs/SPEC.md` section 8 said an entry is "the bytes of the key
 //! file of section 7". That cannot work, and the reason is worth recording: a
 //! key file inside the container would need its own password, so restoring the
 //! backup would need two passwords, and the container's would buy nothing. An
@@ -26,7 +26,7 @@
 //!
 //! # Identifiers
 //!
-//! Each entry carries a 16 byte key identifier, computed as `SPEC.md` section 11
+//! Each entry carries a 16 byte key identifier, computed as `docs/SPEC.md` section 11
 //! defines. A key file has no identifier, so opening a key file is the only way
 //! to find out what it holds. A backup needs one, because it holds several keys
 //! at once and the caller has to be able to tell whether the backup they opened
@@ -120,7 +120,7 @@ impl StoredKey {
         }
     }
 
-    /// The identifier of this key, as `SPEC.md` section 11 defines.
+    /// The identifier of this key, as `docs/SPEC.md` section 11 defines.
     pub fn key_id(&self) -> Result<[u8; KEY_ID_SIZE], Error> {
         match self {
             StoredKey::Sealing(key) => key_id_of(Some(&key.encapsulation_key().to_bytes()), None),
@@ -144,7 +144,7 @@ impl core::fmt::Debug for StoredKey {
 
 /// One key in a backup, with the identifier that names it.
 pub struct BackupEntry {
-    /// The 16 byte key identifier, as `SPEC.md` section 11 defines.
+    /// The 16 byte key identifier, as `docs/SPEC.md` section 11 defines.
     pub key_id: [u8; KEY_ID_SIZE],
     /// The key itself.
     pub key: StoredKey,

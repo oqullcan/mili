@@ -10,7 +10,7 @@ configuration, no algorithm selection, no nonce the caller holds.
 
 **mili has not been audited by anyone.** Every crate it composes has been read by
 mili itself and the notes are in `supply-chain/`, which is a weaker thing than an
-independent audit. `DISCLAIMER.md` says so in the first section a reader reaches,
+independent audit. `docs/DISCLAIMER.md` says so in the first section a reader reaches,
 and `SECURITY.md` says what to report and what is already a documented position.
 
 Licensed under Apache-2.0 or MIT, at your option. See `LICENSE-APACHE` and
@@ -18,10 +18,14 @@ Licensed under Apache-2.0 or MIT, at your option. See `LICENSE-APACHE` and
 
 ## Read these first
 
-- `SPEC.md` — the wire formats, key hierarchy and key schedules
-- `THREAT_MODEL.md` — what is mitigated, what is partial, what is out of scope
-- `DISCLAIMER.md` — what mili does not do, and the words mili does not use
+`docs/README.md` routes you to the one document that matches why you are here.
+The short version:
+
+- `docs/SPEC.md` — the wire formats, key hierarchy and key schedules
+- `docs/THREAT_MODEL.md` — what is mitigated, what is partial, what is out of scope
+- `docs/DISCLAIMER.md` — what mili does not do, and the words mili does not use
 - `SECURITY.md` — what to report, and what is already a documented position
+- `CONTRIBUTING.md` — the checks, and the four failures that have broken CI
 
 ## Suite
 
@@ -40,21 +44,21 @@ above.
 
 A `SymmetricKey` can be generated, backed up and restored, and no format in this
 library encrypts with one, because every format derives its own key from a seed or
-a password. `SPEC.md` section 12.0 records that as a decision and the two
+a password. `docs/SPEC.md` section 12.0 records that as a decision and the two
 alternatives that were rejected.
 
 ## Design rules
 
 1. Nothing is implemented here. Primitives come from crates that other people
    wrote, audited and published.
-2. There is no configuration. If it is not in `SPEC.md`, it is not selectable.
+2. There is no configuration. If it is not in `docs/SPEC.md`, it is not selectable.
 3. The API makes misuse hard or impossible at compile time. Signing keys and
    encryption keys are distinct types that do not convert into each other, in
    Rust and in Go. The caller never sees a nonce or a counter.
 4. Failure is closed and uniform. Every authentication, key agreement and
    cryptographic parse failure returns `Error::Failed` with a fixed message and
    no detail.
-5. No claims beyond what is implemented. See `DISCLAIMER.md`.
+5. No claims beyond what is implemented. See `docs/DISCLAIMER.md`.
 
 ## Layout
 
@@ -76,14 +80,16 @@ fuzz/                cargo-fuzz targets, one per parser, outside the workspace
 Policy and provenance. The tools are pinned and the notes say what was read:
 
 ```
-SPEC.md              the format specification
-THREAT_MODEL.md      the threat model
-DISCLAIMER.md        what mili does not claim
-SECURITY.md          how to report a vulnerability
+docs/                the format, the threat model, the disclaimer, the signing keys
 supply-chain/        cargo-vet configuration, audit notes and what they do not say
 tests/vectors/       known answer and NIST ACVP test vectors, read at compile time
 .github/workflows/   CI, third-party actions pinned by commit SHA
 ```
+
+`docs/README.md` is an index rather than a document: it says which of the four
+belongs to a reader who wants to use mili, one who is assessing it, one who is
+contributing, and one who is verifying a release. `README.md` and `SECURITY.md`
+stay at the root because that is where GitHub looks for them.
 
 Build configuration, one file per tool:
 
@@ -107,7 +113,7 @@ replays them.
 
 ## What is implemented
 
-Every format in `SPEC.md` section 3 is implemented, sealed, opened, verified or
+Every format in `docs/SPEC.md` section 3 is implemented, sealed, opened, verified or
 streamed as that section says.
 
 | `format_type` | Name | Format | Operations |
@@ -120,29 +126,26 @@ streamed as that section says.
 
 `mili-kdf-v1` is the key derivation the sealed box and the key file both call, not
 a file format of its own. `mili-sym-v1` is the name that was rejected;
-`SPEC.md` section 12.0 records why a `SymmetricKey` has no format that encrypts
+`docs/SPEC.md` section 12.0 records why a `SymmetricKey` has no format that encrypts
 with it.
 
 ## Known gaps
 
 Named rather than left for a reader to find.
 
-- `libc` and `curve25519-dalek` are partly read, and both notes state the stopping
-  point in reachability terms rather than line counts: mili reaches three `libc`
-  symbols and all three were read, and `curve25519-dalek` was audited by the
-  backend that executes rather than by file size. `supply-chain/README.md` has the
-  reasoning.
+- `libc` and `curve25519-dalek` are partly read; `supply-chain/README.md` has the
+  argument for where each stops and why that boundary is checkable.
 - `mili-ffi` exports the formats in this table and no others. There is no PEM,
   no DER and no X.509, so the composite signature's assigned OID is not used.
 - A `cargo test` run takes about four minutes, mostly ML-KEM and ML-DSA per
   property case and Argon2 in the key file tests. See the last section.
-- No third party has audited mili. `DISCLAIMER.md` section 3 says what exists
+- No third party has audited mili. `docs/DISCLAIMER.md` section 3 says what exists
   instead.
 - Two algorithms are internet-drafts, not RFCs, and may change. mili freezes
   what it implements under a format version byte.
 - There is no release yet. Nothing here is on crates.io and no tag exists, so
   `mili-core` is `publish = false` and there is nothing to `cargo install`.
-  `SIGNING_KEYS.md` records the state of that.
+  `docs/SIGNING_KEYS.md` records the state of that.
 
 ## Using it
 
@@ -169,7 +172,7 @@ The C ABI and the Go binding have their own build steps, below.
 
 The library is not published to a registry, which means there is no version you
 can depend on that someone else chose. Pin the git revision if you need a fixed
-one, and read `SPEC.md` before depending on a format: two of the primitives are
+one, and read `docs/SPEC.md` before depending on a format: two of the primitives are
 internet-drafts rather than RFCs, and a format version byte is what freezes what
 mili implements.
 
@@ -213,10 +216,9 @@ written by reading its source: 48 crates across 47 names, since `sha3` appears
 twice at 0.11.0 and 0.12.0. The 40 remaining exemptions are all dev or build
 dependencies.
 
-Two of those notes are partial and say so in their own text: `libc` and
-`curve25519-dalek`. `supply-chain/README.md` states for each which part was read,
-which was not, and why that boundary is a checkable claim about reachability
-rather than a matter of how long the file is.
+Two of those notes are partial: `libc` and `curve25519-dalek`. Both name a
+stopping point that is a checkable claim about reachability rather than a matter
+of how long the file is, and `supply-chain/README.md` is where that is argued.
 
 `SECURITY.md` is the file behind the repository's security policy setting, so a
 report lands in GitHub's private advisory flow rather than in a public issue.
@@ -260,19 +262,19 @@ When a release is cut, two things have to be true and are checked by hand rather
 than by CI, because CI has `permissions: contents: read` and cannot write a tag:
 
 - The tag is an Ed25519-signed tag. `git tag -v <tag>` prints a fingerprint that
-  must appear in `SIGNING_KEYS.md`, which also records a withdrawal if a key is
+  must appear in `docs/SIGNING_KEYS.md`, which also records a withdrawal if a key is
   ever suspected of exposure. That file is the revocation mechanism, because an
   offline key has nowhere else to be revoked.
 - Build provenance is produced keyless with sigstore from the workflow run, which
   needs no key and is why provenance and signing are separate mechanisms.
 
-`SPEC.md` section 17 is the policy and `SIGNING_KEYS.md` is the record.
+`docs/SPEC.md` section 17 is the policy and `docs/SIGNING_KEYS.md` is the record.
 
 ## The C ABI and the Go binding
 
 `mili-ffi` is the only crate here that contains `unsafe`. `mili-core` is
 `#![forbid(unsafe_code)]` and stays that way, which is the reason the crate exists.
-Its rules are in `SPEC.md` section 18.1: no pointer arithmetic leaves the crate, output
+Its rules are in `docs/SPEC.md` section 18.1: no pointer arithmetic leaves the crate, output
 buffers belong to the caller, every function returns a code, every output takes a
 capacity and reports its length, and a panic cannot cross the boundary.
 

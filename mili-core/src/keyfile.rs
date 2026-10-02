@@ -1,11 +1,11 @@
 //! Password-wrapped key files: the `mili-key-v1` format.
 //!
-//! A key file holds exactly one key, wrapped under a password. `SPEC.md`
+//! A key file holds exactly one key, wrapped under a password. `docs/SPEC.md`
 //! section 7 has the layout byte by byte.
 //!
 //! # The key derivation
 //!
-//! Argon2id at the profile of `SPEC.md` section 7.1: 64 MiB of memory, 3
+//! Argon2id at the profile of `docs/SPEC.md` section 7.1: 64 MiB of memory, 3
 //! passes, 4 lanes, a 128 bit salt, a 256 bit output. That is the second
 //! recommended option of RFC 9106 section 4, with the lane count left at 4.
 //! Argon2's `p_cost` is its lane count, not a count of operating system threads,
@@ -433,7 +433,7 @@ fn seal_payload(
 
 /// Builds the 41 byte header of a key file.
 ///
-/// The layout is `SPEC.md` section 7:
+/// The layout is `docs/SPEC.md` section 7:
 ///
 /// ```text
 /// ofs  len  field
@@ -488,7 +488,7 @@ const _: () = {
 /// Length in bytes of a key identifier.
 pub const KEY_ID_SIZE: usize = 16;
 
-/// Computes the identifier of a key, as `SPEC.md` section 11 defines it.
+/// Computes the identifier of a key, as `docs/SPEC.md` section 11 defines it.
 ///
 /// The identifier is the first 16 bytes of an HKDF-SHA256 expansion of the
 /// key's public bytes under the `mili-v1:keyid` label, with no salt.
