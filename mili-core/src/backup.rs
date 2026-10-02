@@ -162,6 +162,50 @@ impl core::fmt::Debug for BackupEntry {
 /// A backup container, as a byte string.
 pub struct Backup(Vec<u8>);
 
+/// What a backup container says about itself, before any password is supplied.
+///
+/// Everything here is read from the unauthenticated header, so it is a statement
+/// about what the file claims rather than a statement about what it is. A caller
+/// should use it to decide whether to prompt for a password and to report the
+/// Argon2 profile it is about to run, not to make a trust decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackupInfo {
+    /// The Argon2id memory cost in kibibytes.
+    pub m_cost: u32,
+    /// The Argon2id iteration count.
+    pub t_cost: u32,
+    /// The Argon2id lane count.
+    pub p_cost: u32,
+    /// How many entries the header claims.
+    pub entry_count: u32,
+}
+
+impl Backup {
+    /// Reads what this container says about itself, without a password.
+    ///
+    /// This is the operation a tool needs before it can do anything useful: to
+    /// report "this is a mili backup, N keys, Argon2id 64 MiB" and ask for a
+    /// password, rather than running Argon2 at 64 MiB on a file that may not be a
+    /// mili backup at all. Opening with `open` instead means paying for the
+    /// derivation before knowing whether the file was worth it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedVersion`] if the file declares a format version this
+    /// build does not implement, and [`Error::Failed`] if the magic, the format
+    /// type, the KDF identifiers or the length arithmetic do not hold. The
+    /// password is not consulted and no key material is read.
+    pub fn info(&self) -> Result<BackupInfo, Error> {
+        let header = Header::parse(&self.0)?;
+        Ok(BackupInfo {
+            m_cost: header.m_cost,
+            t_cost: header.t_cost,
+            p_cost: header.p_cost,
+            entry_count: header.entry_count,
+        })
+    }
+}
+
 impl Backup {
     /// Builds a backup from keys, under one password.
     ///
@@ -565,6 +609,7 @@ mod tests {
     use crate::aead::TAG_SIZE;
     use crate::keyfile::{ARGON2_SALT_SIZE, KEY_ID_SIZE, PROFILE, P_COST_CEILING, T_COST_CEILING};
     use crate::signature::SIGNING_KEY_SIZE;
+    use crate::SYMMETRIC_KEY_SIZE;
     use crate::{Error, SealingKey, SigningKey, SymmetricKey};
 
     // Argon2 at 64 MiB is too slow and too allocation heavy to interpret under
@@ -662,6 +707,43 @@ mod tests {
         let backup = Backup::from_keys(PASSWORD, Vec::new()).expect("build");
         assert_eq!(backup.as_bytes().len(), HEADER_SIZE + TAG_SIZE);
         assert!(backup.open(PASSWORD).expect("open").is_empty());
+    }
+
+    /// `info` answers "is this a mili backup and what will opening it cost"
+    /// without running Argon2.
+    ///
+    /// It exists because the README promised a backup container could be
+    /// inspected and no such operation did. The alternative for a tool was to run
+    /// a 64 MiB Argon2 derivation on a file that might not be a mili backup at
+    /// all, or to hand-parse the header itself.
+    #[test]
+    #[cfg(not(miri))]
+    fn info_reads_the_header_without_a_password() {
+        let keys = vec![
+            StoredKey::Sealing(sealing(0x31)),
+            StoredKey::Symmetric(SymmetricKey::from_bytes([0x77u8; SYMMETRIC_KEY_SIZE])),
+        ];
+        let backup = Backup::from_keys(PASSWORD, keys).expect("build");
+
+        let info = backup.info().expect("info");
+        assert_eq!(info.entry_count, 2);
+        assert_eq!(info.m_cost, 64 * 1024);
+        assert_eq!(info.t_cost, 3);
+        assert_eq!(info.p_cost, 4);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn info_of_something_that_is_not_a_backup_is_refused() {
+        // A wrong password is irrelevant here: `info` never consults one.
+        let backup = Backup::from_keys(PASSWORD, Vec::new()).expect("build");
+        assert!(backup.info().is_ok());
+
+        assert!(matches!(
+            Backup::from_bytes(b"not a backup at all"),
+            Err(Error::Failed)
+        ));
+        assert!(matches!(Backup::from_bytes(&[]), Err(Error::Failed)));
     }
 
     #[test]

@@ -5,7 +5,10 @@ package mili
 */
 import "C"
 
-import "fmt"
+import (
+	"fmt"
+	"unsafe"
+)
 
 // A BackupEntry is one key recovered from a [Backup], with the identifier that names
 // it.
@@ -241,3 +244,88 @@ func (b Backup) Bytes() []byte {
 	copy(out, b)
 	return out
 }
+
+// BackupInfo is what a backup container says about itself, read without a
+// password.
+//
+// Every field comes from the unauthenticated header, so it describes what the file
+// claims rather than what it is. The point of asking before opening is cost:
+// opening runs Argon2id at 64 MiB, and a caller handed an arbitrary file should not
+// pay that before knowing whether it is a mili backup at all.
+type BackupInfo struct {
+	// MCost is the Argon2id memory cost in kibibytes.
+	MCost uint32
+	// TCost is the Argon2id iteration count.
+	TCost uint32
+	// PCost is the Argon2id lane count.
+	PCost uint32
+	// EntryCount is how many keys the header claims.
+	EntryCount uint32
+}
+
+// Info reports what the container claims, without a password and without running a
+// derivation.
+//
+// It is the operation the README listed for a backup container as "inspect" for
+// several releases before it existed.
+func (b Backup) Info() (BackupInfo, error) {
+	var out [16]C.uint8_t
+	bPtr, bLen := pointerFor(b)
+	if code := C.mili_backup_info(bPtr, bLen, &out[0], C.size_t(len(out))); code != C.MILI_OK {
+		return BackupInfo{}, translate(code)
+	}
+	read := func(offset int) uint32 {
+		return uint32(out[offset]) | uint32(out[offset+1])<<8 |
+			uint32(out[offset+2])<<16 | uint32(out[offset+3])<<24
+	}
+	return BackupInfo{
+		MCost:      read(0),
+		TCost:      read(4),
+		PCost:      read(8),
+		EntryCount: read(12),
+	}, nil
+}
+
+// KeyID computes the 16 byte identifier a backup entry carries, for a key of the
+// given kind.
+//
+// [BackupEntry.KeyID] and this are the two halves of the workflow
+// SPEC.md section 11 describes for checking that a backup holds the keys it is
+// meant to. Only the first half existed before: a caller could read the
+// identifiers out of a backup but had no way to compute the expected one for a key
+// it held, so the two could not be compared.
+func KeyID(key BackupKey) ([]byte, error) {
+	// Exactly one field is set, which is what [BackupKey.Kind] names, so the
+	// switch picks the same one the library did rather than re-deriving it from a
+	// length.
+	var (
+		payloadType C.uint8_t
+		raw         []byte
+	)
+	switch {
+	case len(key.Sealing) > 0:
+		payloadType, raw = C.MILI_PAYLOAD_SEALING, key.Sealing
+	case len(key.Signing) > 0:
+		payloadType, raw = C.MILI_PAYLOAD_SIGNING, key.Signing
+	case len(key.Symmetric) > 0:
+		payloadType, raw = C.MILI_PAYLOAD_SYMMETRIC, key.Symmetric
+	default:
+		return nil, fmt.Errorf("mili: KeyID needs a key, got an empty one")
+	}
+
+	var out [16]C.uint8_t
+	rawPtr, _ := pointerFor(raw)
+	if code := C.mili_key_id(payloadType, rawPtr, &out[0]); code != C.MILI_OK {
+		return nil, translate(code)
+	}
+	return C.GoBytes(unsafe.Pointer(&out[0]), C.int(len(out))), nil
+}
+
+// ID returns the identifier of a sealing key, as SPEC.md section 11 defines it.
+func (k SealingKey) ID() ([]byte, error) { return KeyID(BackupKey{Sealing: k}) }
+
+// ID returns the identifier of a signing key, as SPEC.md section 11 defines it.
+func (k SigningKey) ID() ([]byte, error) { return KeyID(BackupKey{Signing: k}) }
+
+// ID returns the identifier of a symmetric key, as SPEC.md section 11 defines it.
+func (k SymmetricKey) ID() ([]byte, error) { return KeyID(BackupKey{Symmetric: k}) }

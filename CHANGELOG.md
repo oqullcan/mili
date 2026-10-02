@@ -13,22 +13,44 @@ this section records work that is committed but not released.
 
 ### Added
 
-- `docs/` holds `docs/SPEC.md`, `docs/THREAT_MODEL.md`, `docs/DISCLAIMER.md` and `docs/SIGNING_KEYS.md`,
+- `Backup::info` reports what a backup container claims, without a password and
+  without running a derivation: the Argon2 profile and the entry count. The README
+  has listed "inspect" among a backup container's operations for several releases
+  and no such operation existed. Reachable as `mili_backup_info` and `Backup.Info`.
+- `mili_key_id` and `KeyID`, so the workflow `docs/SPEC.md` section 11 describes for
+  checking that a backup holds the keys it means is implementable from C and Go.
+  `mili_backup_open` returned the identifiers as bytes, but a caller had no way to
+  compute the expected identifier for a key it held, so the two could not be
+  compared. That is the reachable half of a feature being useless.
+- `mili_key_file_wrap_symmetric` and `WrapSymmetricKeyFile`. `mili_key_file_unwrap`
+  already handled the symmetric payload type, so a caller could open a symmetric
+  key file but not create one, and a symmetric key could be put in a backup but not
+  wrapped directly.
+- `docs/` holds `SPEC.md`, `THREAT_MODEL.md`, `DISCLAIMER.md` and `SIGNING_KEYS.md`,
   with `docs/README.md` as a reading guide that routes a reader to one of them
   according to why they are here. `README.md` and `SECURITY.md` stay at the root,
   because that is where GitHub looks for them.
 - `CONTRIBUTING.md`, including the four failures that have broken this repository's
   CI and the error message each one produced, since none of the messages name the
-  cause.
+  cause, and the note that there are two lockfiles to refresh after any dependency
+  change.
 - `SECURITY.md`, which points at GitHub private vulnerability reporting rather than
   at an address, so the reporting channel does not require an identity in it.
-- `docs/SIGNING_KEYS.md`, which records that no key has signed a tag and how a tag is
+- `SIGNING_KEYS.md`, which records that no key has signed a tag and how a tag is
   checked when one does.
 - Licences: `LICENSE-APACHE` and `LICENSE-MIT`, offered as
   `Apache-2.0 OR MIT`.
 
 ### Fixed
 
+- `StreamWriter::write` replaced a sink failure with mili's own message, so a
+  caller writing to a full disk saw `mili: io error` instead of `ENOSPC`, and the
+  same failure reported differently depending on whether it hit a middle chunk or
+  the last one. The caller's `io::Error` is now preserved, which is the one error
+  class `error.rs` says is not a secrecy statement.
+- `StreamWriter` carried a `finished` flag that could never be true, because
+  `finish` consumes `self`. The flag and its check are gone and the documentation
+  says what actually prevents a second final chunk: the signature.
 - `chacha20poly1305` was compiled without its `zeroize` feature, so `ChaChaPoly1305`'s
   `Drop` was empty and the AEAD key was released to the allocator without being
   overwritten. That crate holds the key for all five formats, and for a key file
@@ -75,6 +97,20 @@ this section records work that is committed but not released.
   `universal-hash` as a dependency when it is `cipher` and `zeroize`. A note
   describing a different API surface than the code uses is worse than none when
   it is cited as evidence, so all three are corrected.
+- `docs/THREAT_MODEL.md` section 2.10 said no library path contains an explicit
+  panic. One does, in `keyfile::derive_kek` behind `#[cfg(miri)]`, where it replaces
+  a derivation that cannot be interpreted rather than guarding one. The claim is
+  now the accurate one.
+- The Go binding's key types were documented as making a symmetric-key-as-sealing-
+  seed "a compile error". They do not: Go permits an explicit conversion between
+  named types sharing an underlying type, and the binding's own test performs one.
+  `keys.go`, `README.md` and `docs/SPEC.md` section 19 now say what the types
+  actually buy, which is that the mismatch has to be written down rather than
+  inferred from a length.
+- `docs/SPEC.md` section 18.3 said every size is asked of the library, and the Go
+  binding's three key sizes are Go constants. That is a real exception and now
+  states why: a call cannot appear where a slice length must be a compile-time
+  constant.
 - `cargo-vet`, `cargo-deny` and `cargo-fuzz` are pinned in CI. All three were
   installed unpinned and two of them had already broken a build on a version
   difference.

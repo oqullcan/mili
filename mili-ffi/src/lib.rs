@@ -798,6 +798,42 @@ pub unsafe extern "C" fn mili_key_file_wrap_signing(
     })
 }
 
+/// Wraps a symmetric key under `password`.
+///
+/// This was missing while `mili_key_file_unwrap` already handled
+/// `MILI_KEY_FILE_PAYLOAD_SYMMETRIC`, so a caller could open a symmetric key file
+/// but not create one. The asymmetry was invisible in the header and would have
+/// been a caller discovering it at runtime. A symmetric key can be backed up with
+/// `mili_backup_create`, so before this there was a way to store one and no way to
+/// wrap one directly.
+///
+/// # Safety
+///
+/// `seed` must be readable for `mili_symmetric_key_size` bytes, `password` for
+/// `password_len`, and `out` for `capacity` and `out_len`.
+#[no_mangle]
+pub unsafe extern "C" fn mili_key_file_wrap_symmetric(
+    seed: *const u8,
+    password: *const u8,
+    password_len: Size,
+    out: *mut u8,
+    capacity: Size,
+    out_len: *mut Size,
+) -> i32 {
+    call(|| {
+        let bytes = input(seed, mili_core::SYMMETRIC_KEY_SIZE)?;
+        let seed: [u8; mili_core::SYMMETRIC_KEY_SIZE] =
+            bytes.try_into().map_err(|_| MILI_FAILED)?;
+        let password = input(password, password_len)?;
+        let file = mili(KeyFile::from_symmetric_key(
+            &SymmetricKey::from_bytes(seed),
+            password,
+        ))?;
+        // SAFETY: the caller contract covers `out`, `capacity` and `out_len`.
+        Ok(unsafe { deliver(file.as_bytes(), out, capacity, out_len) })
+    })
+}
+
 /// Opens a key file under `password` and writes the seed it holds back out.
 ///
 /// `expected` is the `payload_type` the caller expects, one of the three values
@@ -1002,6 +1038,119 @@ pub unsafe extern "C" fn mili_backup_open(
         }
         // SAFETY: the caller contract covers `out`, `capacity` and `out_len`.
         Ok(unsafe { deliver(&entries, out, capacity, out_len) })
+    })
+}
+
+/// Computes the identifier of a key, as `docs/SPEC.md` section 11 defines it.
+///
+/// Writes 16 bytes. A caller that has read the identifiers back out of a backup
+/// with `mili_backup_open` can compare them against what it computes here, which is
+/// the workflow `docs/SPEC.md` section 11 describes for detecting a wrong backup.
+///
+/// This was missing, and without it that workflow was not implementable from C or
+/// Go: `mili_backup_open` returned the identifiers as opaque bytes, but a caller
+/// had no way to compute the expected identifier for a key it held, so the two
+/// could not be compared. It is the reachable half of the feature being useless
+/// rather than merely inconvenient.
+///
+/// `payload_type` is `mili_core::keyfile::PAYLOAD_SEALING`, `PAYLOAD_SIGNING` or
+/// `PAYLOAD_SYMMETRIC`, and `key` is that many bytes.
+///
+/// # Safety
+///
+/// `key` must be readable for the length `payload_type` implies and `out` for 16.
+#[no_mangle]
+pub unsafe extern "C" fn mili_key_id(payload_type: u8, key: *const u8, out: *mut u8) -> i32 {
+    call(|| {
+        let entry = match payload_type {
+            mili_core::keyfile::PAYLOAD_SEALING => {
+                let seed: [u8; mili_core::SEALING_KEY_SIZE] =
+                    fixed(input(key, mili_core::SEALING_KEY_SIZE)?)?;
+                stored_key(&packed_entry(payload_type, &seed))?
+            }
+            mili_core::keyfile::PAYLOAD_SIGNING => {
+                let seed: [u8; mili_core::SIGNING_KEY_SIZE] =
+                    fixed(input(key, mili_core::SIGNING_KEY_SIZE)?)?;
+                stored_key(&packed_entry(payload_type, &seed))?
+            }
+            mili_core::keyfile::PAYLOAD_SYMMETRIC => {
+                let seed: [u8; mili_core::SYMMETRIC_KEY_SIZE] =
+                    fixed(input(key, mili_core::SYMMETRIC_KEY_SIZE)?)?;
+                stored_key(&packed_entry(payload_type, &seed))?
+            }
+            _ => return Err(MILI_FAILED),
+        };
+        let id = mili(entry.key_id())?;
+        // Not `deliver`, for the same reason as `mili_backup_info`: that helper
+        // requires an `out_len`, and this function has none because the sixteen
+        // bytes are already stated by the header. Passing null to it would be
+        // refused as a caller error.
+        let destination = output(out, id.len())?;
+        destination.copy_from_slice(&id);
+        Ok(MILI_OK)
+    })
+}
+
+/// Borrows `bytes` as a fixed size array, or fails.
+fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], i32> {
+    bytes.try_into().map_err(|_| MILI_FAILED)
+}
+
+/// Builds the `payload_type || key bytes` encoding `stored_key` expects.
+fn packed_entry(payload_type: u8, key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1usize.saturating_add(key.len()));
+    out.push(payload_type);
+    out.extend_from_slice(key);
+    out
+}
+
+/// Reads what a backup container says about itself, without a password.
+///
+/// Writes `m_cost`, `t_cost`, `p_cost` and `entry_count` as four little endian
+/// `uint32_t` values in that order, so `out` must be writable for 16 bytes. A
+/// password is never consulted and no key material is read, which is the point: a
+/// tool can report "this is a mili backup, N keys, Argon2id 64 MiB" and ask for a
+/// password instead of paying for a 64 MiB derivation on a file that may not be a
+/// mili backup at all.
+///
+/// This is what the backup container section of the README meant by "inspect",
+/// which it listed as an operation for several releases before the operation
+/// existed.
+///
+/// # Errors
+///
+/// `MILI_UNSUPPORTED_VERSION` if the file declares a format version this build does
+/// not implement, and `MILI_FAILED` if it is not a well formed mili backup. The
+/// header is unauthenticated, so a successful call says what the file claims, not
+/// what it is.
+///
+/// # Safety
+///
+/// `backup` must be readable for `backup_len` bytes and `out` for 16.
+#[no_mangle]
+pub unsafe extern "C" fn mili_backup_info(
+    backup: *const u8,
+    backup_len: Size,
+    out: *mut u8,
+    capacity: Size,
+) -> i32 {
+    call(|| {
+        if capacity < 16 {
+            return Err(MILI_BUFFER_TOO_SMALL);
+        }
+        let bytes = input(backup, backup_len)?;
+        let container = mili(Backup::from_bytes(bytes))?;
+        let info = mili(container.info())?;
+        let values = [info.m_cost, info.t_cost, info.p_cost, info.entry_count];
+        let mut encoded = Vec::with_capacity(16);
+        for value in values {
+            encoded.extend_from_slice(&value.to_le_bytes());
+        }
+        // Not `deliver`: that requires an `out_len`, and this function has none,
+        // because the length is the sixteen bytes the signature already states.
+        let destination = output(out, encoded.len())?;
+        destination.copy_from_slice(&encoded);
+        Ok(MILI_OK)
     })
 }
 

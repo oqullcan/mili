@@ -14,9 +14,18 @@ import "fmt"
 // and guessed its kind from its length would read a symmetric key as a sealing key
 // and hand back 32 bytes the caller would then encrypt with, believing they were a
 // seed. That is not a runtime error; it is a key used as the wrong kind of key, and
-// nothing downstream would notice. Naming the types makes it a compile error instead,
-// which is the same rule mili-core applies with `SealingKey` and `SigningKey` and the
-// same rule its README states.
+// nothing downstream would notice. Naming the types stops that from happening by
+// accident, which is the same rule mili-core applies with `SealingKey` and
+// `SigningKey` and the same rule its README states.
+//
+// The guarantee is weaker here than in mili-core, and the difference is worth being
+// precise about. mili-core's types are distinct newtypes with no conversions at all,
+// so `SealingKey(SymmetricKey(..))` does not compile there. Go permits an explicit
+// conversion between named types with identical underlying types, so
+// `mili.SealingKey(symmetricKey)` compiles here. What naming buys in Go is that the
+// mismatch must be written down rather than inferred from a length; what it does not
+// buy is that it is impossible. Each function still checks the length of what it is
+// handed and returns an error rather than using it.
 type (
 	// SealingKey is an X-Wing sealing key: a 32 byte seed for ML-KEM-768 and
 	// X25519. The secret half of the sealed box.

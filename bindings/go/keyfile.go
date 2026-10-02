@@ -170,3 +170,25 @@ func (f KeyFile) Bytes() []byte {
 	copy(out, f)
 	return out
 }
+
+// WrapSymmetricKeyFile wraps a symmetric key under a password.
+//
+// This was missing while UnwrapKeyFile already handled PayloadSymmetric, so a
+// caller could open a symmetric key file but not create one. A symmetric key could
+// also be put in a backup, so before this there was a way to store one and no way
+// to wrap one directly.
+func WrapSymmetricKeyFile(key SymmetricKey, password []byte) (KeyFile, error) {
+	if len(key) != SymmetricKeySize {
+		return nil, fmt.Errorf("mili: a symmetric key is %d bytes, got %d", SymmetricKeySize, len(key))
+	}
+	out := make([]byte, SymmetricKeySize+keyFileOverhead)
+	var written C.size_t
+	passwordPtr, passwordLen := pointerFor(password)
+	code := C.mili_key_file_wrap_symmetric(
+		(*C.uint8_t)(unsafePointer(key)),
+		passwordPtr, passwordLen,
+		(*C.uint8_t)(unsafePointer(out)), C.size_t(len(out)),
+		&written,
+	)
+	return wrapResult(code, out, written)
+}

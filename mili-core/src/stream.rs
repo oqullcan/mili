@@ -138,7 +138,6 @@ pub fn seal_stream<W: Write>(key: &SealingKey, mut sink: W) -> Result<StreamWrit
         header,
         counter: 0,
         buffer: Vec::with_capacity(ENCRYPTED_CHUNK_SIZE),
-        finished: false,
     })
 }
 
@@ -336,7 +335,6 @@ pub struct StreamWriter<W: Write> {
     header: Vec<u8>,
     counter: u64,
     buffer: Vec<u8>,
-    finished: bool,
 }
 
 impl<W: Write> StreamWriter<W> {
@@ -345,11 +343,12 @@ impl<W: Write> StreamWriter<W> {
     /// # Errors
     ///
     /// [`Error::Failed`] if the chunk counter would reach `2^64`, and
-    /// [`Error::Io`] if the sink fails. Calling this twice fails, because a
-    /// second final chunk would be trailing data in every reader.
+    /// [`Error::Io`] if the sink fails. `finish` consumes `self`, so calling it
+    /// twice does not compile. That is the whole guarantee: a second final chunk
+    /// would be trailing data in every reader, and the type system is what
+    /// prevents it.
     pub fn finish(mut self) -> Result<W, Error> {
         self.flush_chunk(FINAL)?;
-        self.finished = true;
         Ok(self.sink)
     }
 
@@ -393,20 +392,32 @@ impl<W: Write> fmt::Debug for StreamWriter<W> {
         f.debug_struct("StreamWriter")
             .field("chunks_written", &self.counter)
             .field("buffered_bytes", &self.buffer.len())
-            .field("finished", &self.finished)
             .finish_non_exhaustive()
+    }
+}
+
+/// Turns mili's error into an `io::Error`, keeping a sink failure intact.
+///
+/// `Error::Io` already carries the caller's error, and `Display` for it is the
+/// fixed string `"mili: io error"`. Rebuilding from that string loses the
+/// `ErrorKind`, so a caller writing to a full disk saw `mili: io error` instead
+/// of `ENOSPC` and could not tell a full disk from a permission problem.
+fn io_error(error: Error) -> io::Error {
+    match error {
+        Error::Io(original) => original,
+        // The other three are mili's own failures surfacing through a `Write`
+        // call. They carry no `io::ErrorKind`, so the message is all there is.
+        other => io::Error::other(other.to_string()),
     }
 }
 
 impl<W: Write> Write for StreamWriter<W> {
     /// # Errors
     ///
-    /// [`Error::Failed`] if this writer has already been finished, or if the sink
-    /// fails.
+    /// If the sink fails. A writer cannot be written to after `finish`, because
+    /// `finish` consumes `self`; that is enforced by the signature rather than by
+    /// a flag, which is why there is no "already finished" check here.
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.finished {
-            return Err(io::Error::other("mili: the stream is already finished"));
-        }
         let mut remaining = data;
         while !remaining.is_empty() {
             // `buffer` only ever grows to `CHUNK_SIZE` and is cleared on flush, so
@@ -422,8 +433,15 @@ impl<W: Write> Write for StreamWriter<W> {
             // here unconditionally would give every message whose length is a
             // multiple of the chunk size a trailing empty final chunk.
             if self.buffer.len() == CHUNK_SIZE && !remaining.is_empty() {
-                self.flush_chunk(NOT_FINAL)
-                    .map_err(|e| io::Error::other(e.to_string()))?;
+                // The sink's own `io::Error` is preserved rather than flattened
+                // to mili's message. `Error::Io`'s `Display` is the fixed
+                // string `"mili: io error"`, so `to_string()` here would replace
+                // a caller's `ENOSPC` with a string that says only "mili", and
+                // would make the same failure report differently depending on
+                // whether it hit this path or `finish`. The caller's own I/O
+                // error is not a secrecy statement, so keeping it leaks nothing
+                // that `error.rs` does not already say is out of scope.
+                self.flush_chunk(NOT_FINAL).map_err(io_error)?;
             }
         }
         Ok(data.len())
@@ -576,7 +594,7 @@ mod tests {
     use super::{open_buffered, open_stream, seal_buffered, seal_stream};
     use crate::aead::TAG_SIZE;
     #[cfg(not(miri))]
-    use crate::{Error, SealingKey};
+    use crate::{Error, SealingKey, SEALING_KEY_SIZE};
     #[cfg(not(miri))]
     use std::io::{Read, Write};
 
@@ -1023,5 +1041,89 @@ mod tests {
         let a = encrypt(b"the same message");
         let b = encrypt(b"the same message");
         assert_ne!(a, b);
+    }
+
+    /// A sink failure must keep its own `io::Error`, not become mili's string.
+    ///
+    /// `StreamWriter::write` wrapped a sink error with
+    /// `io::Error::other(e.to_string())`, and `Error::Io`'s `Display` is the
+    /// fixed string `"mili: io error"`. So a caller writing to a full disk saw
+    /// `mili: io error` instead of `ENOSPC`, and the same failure on the last
+    /// chunk reported differently because `finish` propagated the original. That
+    /// inconsistency matters on a multi-gigabyte write, where the caller's own
+    /// I/O error is the only useful diagnostic and is the one class `error.rs`
+    /// says is not a secrecy statement.
+    #[test]
+    #[cfg(not(miri))]
+    fn a_sink_failure_during_write_keeps_its_error_kind() {
+        use std::io::Write as _;
+
+        /// Accepts the header, then fails every later write.
+        struct Full {
+            remaining: usize,
+        }
+
+        impl Write for Full {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    return Err(std::io::Error::from(std::io::ErrorKind::StorageFull));
+                }
+                let take = data.len().min(self.remaining);
+                self.remaining -= take;
+                Ok(take)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let key = SealingKey::from_bytes([0x31u8; SEALING_KEY_SIZE]);
+        // Just enough room for the header, so the first chunk flush is what
+        // fails. seal_stream writes the header itself, so a sink that fails there
+        // is a different path and is not what this test is about.
+        let mut writer = seal_stream(
+            &key,
+            Full {
+                remaining: HEADER_SIZE,
+            },
+        )
+        .expect("new");
+
+        // More than one chunk so that a flush happens mid-message rather than
+        // only in finish.
+        let payload = vec![0u8; CHUNK_SIZE + 16];
+        let error = writer.write(&payload).expect_err("write should fail");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::StorageFull,
+            "the sink's own error kind was replaced by mili's message: {error}"
+        );
+    }
+
+    /// `into_inner` gives back a sink holding a file every reader rejects.
+    ///
+    /// It had no test at all, and was the only public function in `mili-core`
+    /// with none. The behaviour is correct and documented; what was missing was
+    /// anything that would notice if it changed, and a caller who reaches for it
+    /// to recover their file gets no signal at any layer that what they hold is
+    /// truncated.
+    #[test]
+    #[cfg(not(miri))]
+    fn into_inner_yields_a_file_every_reader_rejects() {
+        use std::io::Write as _;
+
+        let key = SealingKey::from_bytes([0x31u8; SEALING_KEY_SIZE]);
+        let mut file = Vec::new();
+        let mut writer = seal_stream(&key, &mut file).expect("new");
+
+        // Written but never finished: a header and no final chunk.
+        writer.write_all(b"a message").expect("write");
+        writer.into_inner();
+
+        assert!(!file.is_empty(), "nothing at all was written");
+        assert!(
+            open_stream(&file[..], &[&key]).is_err(),
+            "the file into_inner produced was accepted by a reader"
+        );
     }
 }

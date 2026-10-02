@@ -115,8 +115,11 @@ Mitigated by `SPEC.md` section 7.2.
 ### 2.10 Parser panics
 
 `mili-core` is `#![forbid(unsafe_code)]`. Every parse is length checked and
-fallible. No library path contains `unwrap`, `expect` or an explicit panic, and
-no arithmetic in the library can wrap, because `clippy::arithmetic_side_effects`
+fallible. No library path contains `unwrap` or `expect`, and the one explicit
+`panic!` in the crate is in `keyfile::derive_kek` behind `#[cfg(miri)]`, where it
+replaces a derivation that cannot be interpreted rather than guarding one; it is
+test-support code and is not compiled into a release build. No arithmetic in the
+library can wrap, because `clippy::arithmetic_side_effects`
 is denied over the library and every operation states how it behaves when it
 overflows. Panic freedom is checked by `cargo-fuzz` targets on every parser, by
 `cargo +nightly miri test`, and by the unit and property suites.

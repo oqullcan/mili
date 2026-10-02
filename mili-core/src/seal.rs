@@ -1,8 +1,8 @@
 //! Sealed boxes: one message, one recipient, one buffer.
 //!
 //! A sealed box is the `mili-seal-v1` format. It encrypts a single in-memory
-//! buffer to a single X-Wing public key. For files larger than memory, use the
-//! streaming format added in a later phase.
+//! buffer to a single X-Wing public key. For files larger than memory, use
+//! [`crate::stream`], which encrypts the same way in 64 KiB chunks.
 //!
 //! The layout is fixed and documented byte by byte in `docs/SPEC.md` section 4:
 //!

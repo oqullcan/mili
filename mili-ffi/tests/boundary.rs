@@ -27,6 +27,11 @@ use std::ptr;
 use mili_ffi::*;
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
+
+// The payload type values the header defines, restated here because they are C
+// preprocessor macros rather than something Rust sees.
+const MILI_PAYLOAD_SEALING: u8 = 1;
+const MILI_PAYLOAD_SYMMETRIC: u8 = 3;
 const OTHER_PASSWORD: &[u8] = b"not the password";
 
 /// A `size_t` the caller would allocate, filled from the library.
@@ -1208,4 +1213,146 @@ fn mili_stream_overhead_is_the_overhead_and_not_the_total() {
             "the sealed length for {len} bytes is not header plus plaintext plus tags"
         );
     }
+}
+
+/// The three functions that make a backup container and its key identifiers
+/// usable from C, which did not exist.
+///
+/// `mili_backup_info` is what the README meant by inspecting a backup: report what
+/// it claims and what opening it would cost, without running a 64 MiB derivation.
+/// `mili_key_id` is the other half of the identifier workflow `docs/SPEC.md`
+/// section 11 describes, which was not implementable from C before because a caller
+/// could read the identifiers out of a backup but could not compute the expected
+/// one. `mili_key_file_wrap_symmetric` removes an asymmetry where a symmetric key
+/// file could be opened but never created.
+#[test]
+fn a_backup_can_be_described_without_a_password() {
+    let mut sealing = vec![0x31u8; 1 + 32];
+    sealing[0] = MILI_PAYLOAD_SEALING;
+    let backup = create_backup(&[sealing]).expect("create entry");
+
+    let mut out = [0u8; 16];
+    assert_eq!(
+        unsafe { mili_backup_info(backup.as_ptr(), backup.len(), out.as_mut_ptr(), out.len()) },
+        MILI_OK
+    );
+    let m_cost = u32::from_le_bytes(out[0..4].try_into().expect("4 bytes"));
+    let t_cost = u32::from_le_bytes(out[4..8].try_into().expect("4 bytes"));
+    let p_cost = u32::from_le_bytes(out[8..12].try_into().expect("4 bytes"));
+    let entries = u32::from_le_bytes(out[12..16].try_into().expect("4 bytes"));
+
+    assert_eq!(entries, 1);
+    assert_eq!(
+        m_cost,
+        64 * 1024,
+        "the documented Argon2id profile is 64 MiB"
+    );
+    assert_eq!(t_cost, 3);
+    assert_eq!(p_cost, 4);
+
+    // Not a backup, and a short buffer.
+    assert_eq!(
+        unsafe { mili_backup_info(b"nope".as_ptr(), 4, out.as_mut_ptr(), out.len()) },
+        MILI_FAILED
+    );
+    assert_eq!(
+        unsafe { mili_backup_info(backup.as_ptr(), backup.len(), out.as_mut_ptr(), 15) },
+        MILI_BUFFER_TOO_SMALL
+    );
+}
+
+#[test]
+fn a_key_identifier_is_computable_and_matches_the_one_in_a_backup() {
+    let seed = [0x42u8; 32];
+    let mut sealing_entry = vec![MILI_PAYLOAD_SEALING];
+    sealing_entry.extend_from_slice(&seed);
+    let backup = create_backup(&[sealing_entry]).expect("create");
+    let opened = open_backup(&backup, PASSWORD).expect("open");
+
+    // `mili_backup_open` writes entries as 16 byte id then the payload, so the
+    // first 16 bytes are the identifier.
+    let from_backup = &opened[..16];
+
+    let mut computed = [0u8; 16];
+    assert_eq!(
+        unsafe { mili_key_id(MILI_PAYLOAD_SEALING, seed.as_ptr(), computed.as_mut_ptr()) },
+        MILI_OK
+    );
+    assert_eq!(
+        computed.as_slice(),
+        from_backup,
+        "the identifier computed here does not match the one in the backup"
+    );
+
+    // Deterministic, and an unknown type is refused rather than guessing.
+    let mut again = [0u8; 16];
+    assert_eq!(
+        unsafe { mili_key_id(MILI_PAYLOAD_SEALING, seed.as_ptr(), again.as_mut_ptr()) },
+        MILI_OK
+    );
+    assert_eq!(computed, again);
+    assert_eq!(
+        unsafe { mili_key_id(0xFF, seed.as_ptr(), computed.as_mut_ptr()) },
+        MILI_FAILED
+    );
+}
+
+#[test]
+fn a_symmetric_key_file_can_be_created_as_well_as_opened() {
+    let seed = [0x5Au8; 32];
+    let mut out = vec![0u8; 4096];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe {
+            mili_key_file_wrap_symmetric(
+                seed.as_ptr(),
+                PASSWORD.as_ptr(),
+                PASSWORD.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        },
+        MILI_OK
+    );
+    out.truncate(written);
+
+    // And it opens back to the same bytes, which it could not before this
+    // function existed: unwrap already handled the symmetric payload type.
+    let mut opened = [0u8; 32];
+    let mut opened_len = 0usize;
+    assert_eq!(
+        unsafe {
+            mili_key_file_unwrap(
+                out.as_ptr(),
+                out.len(),
+                MILI_PAYLOAD_SYMMETRIC,
+                PASSWORD.as_ptr(),
+                PASSWORD.len(),
+                opened.as_mut_ptr(),
+                opened.len(),
+                &mut opened_len,
+            )
+        },
+        MILI_OK
+    );
+    assert_eq!(opened, seed);
+    assert_eq!(opened_len, 32);
+
+    // The other typed openers still refuse it.
+    assert_eq!(
+        unsafe {
+            mili_key_file_unwrap(
+                out.as_ptr(),
+                out.len(),
+                MILI_PAYLOAD_SEALING,
+                PASSWORD.as_ptr(),
+                PASSWORD.len(),
+                opened.as_mut_ptr(),
+                opened.len(),
+                &mut opened_len,
+            )
+        },
+        MILI_FAILED
+    );
 }

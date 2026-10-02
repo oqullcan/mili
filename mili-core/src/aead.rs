@@ -47,9 +47,9 @@ impl AeadNonce {
 
     /// Builds a nonce from bytes a format has already derived.
     ///
-    /// Crate-private. The streaming format is the only caller, and it arrives in
-    /// a later phase; the known answer tests use it now.
-    #[allow(dead_code)]
+    /// Crate-private. The streaming format derives its nonce from a counter and
+    /// the final chunk flag; the other formats use [`AeadNonce::ZERO`], which is
+    /// sound because their key is a fresh HKDF expansion of a random salt.
     pub(crate) fn from_bytes(bytes: [u8; NONCE_SIZE]) -> Self {
         Self(bytes)
     }

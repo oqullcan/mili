@@ -121,6 +121,9 @@ int32_t mili_key_file_wrap_sealing(const uint8_t *seed,
 int32_t mili_key_file_wrap_signing(const uint8_t *seed,
                                    const uint8_t *password, size_t password_len,
                                    uint8_t *out, size_t capacity, size_t *out_len);
+int32_t mili_key_file_wrap_symmetric(const uint8_t *seed,
+                                     const uint8_t *password, size_t password_len,
+                                     uint8_t *out, size_t capacity, size_t *out_len);
 
 /* Opens a key file, stating which kind of key the caller expects: MILI_PAYLOAD_SEALING,
  * MILI_PAYLOAD_SIGNING or MILI_PAYLOAD_SYMMETRIC.
@@ -165,6 +168,21 @@ int32_t mili_backup_create(const uint8_t *keys, const size_t *keys_len, size_t k
 int32_t mili_backup_open(const uint8_t *backup, size_t backup_len,
                          const uint8_t *password, size_t password_len,
                          uint8_t *out, size_t capacity, size_t *out_len);
+
+/* Reads what a backup container says about itself, without a password. Writes four
+ * little endian uint32_t values in order: m_cost, t_cost, p_cost, entry_count, so
+ * `out` must hold 16 bytes. No key material is read and no derivation runs, which is
+ * the point: a tool can report what a file claims and what opening it would cost
+ * before asking for a password. The header is unauthenticated, so this says what
+ * the file claims rather than what it is. */
+int32_t mili_backup_info(const uint8_t *backup, size_t backup_len,
+                         uint8_t *out, size_t capacity);
+
+/* Computes the 16 byte key identifier SPEC.md section 11 defines. `payload_type` is
+ * MILI_PAYLOAD_SEALING, MILI_PAYLOAD_SIGNING or MILI_PAYLOAD_SYMMETRIC and `key` is
+ * that many bytes, so the identifiers mili_backup_open returns can be compared
+ * against what a caller computes for the key it holds. */
+int32_t mili_key_id(uint8_t payload_type, const uint8_t *key, uint8_t *out);
 
 #ifdef __cplusplus
 }

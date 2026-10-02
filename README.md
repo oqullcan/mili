@@ -284,9 +284,16 @@ generator, configuration and toolchain all become part of what a caller compiles
 against.
 
 `bindings/go` is a cgo layer over that ABI with no dependencies and no policy of its
-own. The three key kinds are three distinct Go types, which is what stops a symmetric
-key from being read as a sealing seed: both are 32 bytes, and a length would not tell
-them apart.
+own. The three key kinds are three distinct Go types, so a symmetric key cannot be
+handed to a function expecting a sealing seed by accident: both are 32 bytes and a
+length would not tell them apart.
+
+The guarantee is weaker in Go than in `mili-core`, and `keys.go` says so. In
+`mili-core` the types are distinct newtypes with no conversions at all, so the
+mismatch does not compile. Go permits an explicit conversion between named types
+sharing an underlying type, so `mili.SealingKey(aSymmetricKey)` does. Naming stops
+it from happening by inference rather than by intent, and each function still states
+the kind it expects and checks what it is handed.
 
 ## Cost of the checks
 

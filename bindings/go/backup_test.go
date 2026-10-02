@@ -204,3 +204,96 @@ func TestKindStringNamesEveryKind(t *testing.T) {
 		t.Errorf("Kind(99).String() = %q, want %q", got, "unknown")
 	}
 }
+
+// Info reports what a backup claims without running a 64 MiB derivation, and KeyID
+// computes the other half of the identifier workflow SPEC.md section 11 describes.
+// Only the readable half existed before: a caller could read the identifiers out of
+// a backup but not compute the expected one for a key it held.
+func TestBackupInfoAndKeyID(t *testing.T) {
+	sealing, err := GenerateSealingKey()
+	if err != nil {
+		t.Fatalf("GenerateSealingKey: %v", err)
+	}
+	builder := NewBackupBuilder()
+	if err := builder.AddSealingKey(sealing); err != nil {
+		t.Fatalf("AddSealingKey: %v", err)
+	}
+	backup, err := builder.Build([]byte(testPassword))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	info, err := backup.Info()
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if info.EntryCount != 1 {
+		t.Errorf("EntryCount = %d, want 1", info.EntryCount)
+	}
+	if info.MCost != 64*1024 || info.TCost != 3 || info.PCost != 4 {
+		t.Errorf("profile = %d/%d/%d, want 65536/3/4", info.MCost, info.TCost, info.PCost)
+	}
+
+	id, err := sealing.ID()
+	if err != nil {
+		t.Fatalf("ID: %v", err)
+	}
+	entries, err := backup.Open([]byte(testPassword))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if string(entries[0].KeyID) != string(id) {
+		t.Errorf("the computed identifier does not match the one in the backup")
+	}
+
+	// Deterministic.
+	again, err := sealing.ID()
+	if err != nil {
+		t.Fatalf("ID again: %v", err)
+	}
+	if string(again) != string(id) {
+		t.Error("the identifier is not deterministic")
+	}
+
+	// Not a backup, and an empty key.
+	if _, err := Backup([]byte("nope")).Info(); !errors.Is(err, ErrFailed) {
+		t.Errorf("Info on a non-backup gave %v, want ErrFailed", err)
+	}
+	if _, err := KeyID(BackupKey{}); err == nil {
+		t.Error("KeyID of an empty key was accepted")
+	}
+}
+
+// A symmetric key file could be opened but not created before this.
+func TestWrapSymmetricKeyFile(t *testing.T) {
+	key, err := GenerateSymmetricKey()
+	if err != nil {
+		t.Fatalf("GenerateSymmetricKey: %v", err)
+	}
+	file, err := WrapSymmetricKeyFile(key, []byte(testPassword))
+	if err != nil {
+		t.Fatalf("WrapSymmetricKeyFile: %v", err)
+	}
+
+	if kind := file.PayloadType(); kind != PayloadSymmetric {
+		t.Errorf("PayloadType = %v, want PayloadSymmetric", kind)
+	}
+
+	// Unwrap takes the expected kind as an argument, so this is the path a caller
+	// uses to ask for the symmetric key back.
+	opened, err := file.unwrap(PayloadSymmetric, []byte(testPassword))
+	if err != nil {
+		t.Fatalf("unwrap: %v", err)
+	}
+	if string(opened) != string(key) {
+		t.Error("the key came back different")
+	}
+
+	// The other typed openers still refuse it.
+	if _, err := file.UnwrapSealing([]byte(testPassword)); !errors.Is(err, ErrFailed) {
+		t.Errorf("a symmetric key file opened as a sealing key: %v, want ErrFailed", err)
+	}
+}

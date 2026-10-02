@@ -62,10 +62,11 @@
 //! # }
 //! ```
 //!
-//! # What is not here yet
+//! # What is not here
 //!
-//! Key files and the FFI are added in later phases, each under its own format
-//! version as specified in `docs/SPEC.md`.
+//! There is no streaming signature in mili-v1, and no format that encrypts with a
+//! `SymmetricKey`, which `docs/SPEC.md` section 12.0 records as a decision rather
+//! than an omission. Everything else in that document is implemented.
 //!
 //! # Errors
 //!
@@ -127,6 +128,7 @@ pub mod secret;
 pub mod signature;
 pub mod stream;
 
+pub use crate::backup::BackupInfo;
 pub use crate::error::Error;
 pub use crate::kem::{EncapsulationKey, SealingKey, ENCAPSULATION_KEY_SIZE, SEALING_KEY_SIZE};
 pub use crate::seal::{open, seal, SEALED_BOX_OVERHEAD};

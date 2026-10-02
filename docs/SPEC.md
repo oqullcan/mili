@@ -451,7 +451,16 @@ A backup container is identified by its Argon2 profile and salt, so restoring a
 container re-derives the same wrapping key on any platform. `key_id` is the
 value of section 11, used to tell the entries apart and to detect a wrong backup,
 not to select a key. `entry_count` entries with the same `key_id` are refused, so
-a container never holds a key twice under one identifier.
+a container never holds a key twice under one identifier. That rule is enforced on
+read as well as on write: `Backup::from_keys` refuses a duplicate while building,
+and `parse_entries` refuses one while reading, so a container produced by another
+implementation of this format gets the same answer. A write-side-only rule would
+mean the reader could hand back two entries under one identifier with no signal.
+
+`Backup::info` reads the unauthenticated header and reports the Argon2 profile and
+`entry_count` without a password. It exists so a tool can say "this is a mili
+backup, N keys, Argon2id 64 MiB" and ask for a password, rather than paying for a
+64 MiB derivation on a file that may not be a mili backup at all.
 
 ### 8.1 Why an entry is a key and not a key file
 
@@ -533,6 +542,14 @@ key_id = HKDF-SHA256(ikm = public_key_bytes, salt = empty,
 after the fact. It is never written into a sealed box or a stream file. It is
 only stored inside a backup container, where the container is already
 password-protected.
+
+`Backup::info` reports what a container claims without a password, and
+`StoredKey::key_id` computes the other half of this workflow. Both are reachable
+through the C ABI as `mili_backup_info` and `mili_key_id`, and through Go as
+`Backup.Info` and `KeyID`. The second was added late: `mili_backup_open` returned
+the identifiers but a caller had no way to compute the expected one for a key it
+held, so the workflow this section describes was not implementable outside
+`mili-core` at all.
 
 ## 12. Key hierarchy
 
@@ -812,6 +829,13 @@ Every size is reported by a `*_size()` function rather than written into the hea
 so that a caller compiled against one version of the header and linked against
 another asks the linked library rather than trusting a constant it baked in.
 
+The Go binding is the one exception and states it: `SealingKeySize`,
+`SigningKeySize` and `SymmetricKeySize` are Go constants rather than calls into
+the library, because a Go function call cannot appear where a slice length must be
+a compile-time constant, and these three are part of the type definitions rather
+than part of a wire format. Every size that appears in a header is still asked of
+the library.
+
 Two mili constants are named apart because the boundary got one of them wrong:
 
 - `SIGNATURE_PAYLOAD_SIZE` is 3373, the two component signatures and nothing else.
@@ -846,8 +870,17 @@ The three key kinds are three distinct Go types, `SealingKey`, `SigningKey` and
 `SymmetricKey`. That is not decoration. A sealing key and a symmetric key are both
 32 bytes, so anything that inferred the kind from the length would read a symmetric
 key as a sealing key and hand back bytes the caller would then encrypt with. Naming
-the types makes that a compile error, which is the same rule `mili-core` applies and
-the same rule its README states.
+the types stops that from happening by accident.
+
+It stops it by accident, which is weaker than in `mili-core`. There the types are
+distinct newtypes with no conversions, so the mismatch does not compile. Go permits
+an explicit conversion between named types sharing an underlying type, so
+`mili.SealingKey(aSymmetricKey)` compiles, and `keys.go` says so and
+`keyfile_test.go` does exactly that once to show the library reports the payload
+kind rather than guessing. The residual defence is that each function states the
+kind it expects to the library and checks what it is handed, so the conversion
+produces a file the caller can read back but not one that silently becomes the key
+they thought it was.
 
 `KeyFile` and `Backup` are byte strings with methods. A key file opens through
 `UnwrapSealing` or `UnwrapSigning`, and each states which kind it expects to the
