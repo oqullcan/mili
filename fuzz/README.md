@@ -160,6 +160,28 @@ To add one: run the target until it crashes, then move the file from
 `artifacts/<target>/` to `regressions/<target>/`, and say in the commit message
 what it found. A regression entry without the defect it pins is noise.
 
+### A crash in CI
+
+CI runs a one minute campaign per target, and when one of those crashes, the
+input is uploaded as an artifact named `fuzz-crash-<target>` rather than being
+left in the runner's disk. The artifact holds `artifacts/<target>/`, which is
+where cargo-fuzz writes what libFuzzer found.
+
+Without it a red CI run says only that a target crashed. libFuzzer prints the
+byte offset and a truncated reproducer, not the input, so reproducing the failure
+locally means fuzzing again and hoping to hit the same path. With it, download
+the artifact, drop the file into `artifacts/<target>/`, and run the target
+against that file directly:
+
+```sh
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu <target> \
+  artifacts/<target>/<downloaded-file>
+```
+
+That is the same command CI uses for `regressions/`, and it either crashes in
+seconds or does not, which is the difference between investigating a report and
+chasing it.
+
 ## Profile
 
 `[profile.release]` in `fuzz/Cargo.toml` sets `debug-assertions = true` and

@@ -28,6 +28,13 @@ jobs:
   check:
     name: fmt, clippy, test, deny
     runs-on: ubuntu-latest
+    # Measured at five minutes. GitHub's default is six hours, so a step that
+    # hangs — a test blocked on a lock, a prompt waiting for input, a dependency
+    # resolution that never converges — holds a runner for six hours and says
+    # nothing about which step it was. Every timeout here is several times the
+    # measured time rather than a little above it, because a contended or slower
+    # runner is normal and a false timeout is a red build that means nothing.
+    timeout-minutes: 30
     steps:
       - name: Check out the repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -107,6 +114,11 @@ jobs:
   miri:
     name: miri
     runs-on: ubuntu-latest
+    # The longest job here at about eleven minutes, and the one most likely to get
+    # slower: Miri's cost is superlinear in the test body, so adding a case to a
+    # sweep moves this number a lot. Forty-five minutes is four times the measured
+    # time, which leaves room for a slower runner without leaving room for a hang.
+    timeout-minutes: 45
     steps:
       - name: Check out the repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -151,6 +163,11 @@ jobs:
   fuzz:
     name: fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest
+    # About two minutes per target today. The headroom is deliberately large
+    # because the first thing that changes when a target is slow is that someone
+    # raises this budget, and a budget that has to be raised is cheaper than a
+    # target that is killed before it finishes.
+    timeout-minutes: 20
     strategy:
       # One target per job rather than one job for all of them, so a slow target
       # does not serialise behind the others and a failure names the target.
@@ -241,9 +258,38 @@ jobs:
             -max_total_time=60 \
             -print_final_stats=1
 
+      # A libFuzzer crash is a file, and without this step that file is only ever
+      # in the runner's ephemeral disk and the job log's tail. The log says a
+      # target crashed; it does not say with what, and libFuzzer's own summary
+      # truncates the reproducer. This makes the input available to download, so a
+      # crash can be replayed locally with the command in fuzz/README.md instead of
+      # being rediscovered by fuzzing again.
+      #
+      # `if: failure()` rather than `if: success()`, because the likeliest crash to
+      # happen is the one in the replay step above: a committed regression that no
+      # longer reproduces as a crash but panics or aborts is still a failure worth
+      # keeping the input for. `ignore` because a failure in an earlier step — a
+      # cargo-deny finding, a missing lockfile — has no artifacts to upload, and an
+      # upload that fails would replace the real error with a second one.
+      #
+      # Only the artifacts are uploaded, not the corpus. The corpus is what a
+      # campaign accumulates to find bugs; here it would be a minute of noise, and
+      # a corpus in an artifact would read as a corpus worth committing.
+      - name: Upload the crashing input, if the target crashed
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
   ffi:
     name: mili-ffi and the Go binding
     runs-on: ubuntu-latest
+    # About one minute, most of it installing Go. The headroom covers a cold Go
+    # toolchain download and a cargo-deny install on an uncached runner.
+    timeout-minutes: 20
     steps:
       - name: Check out the repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -284,6 +330,10 @@ jobs:
   audit:
     name: advisory audit
     runs-on: ubuntu-latest
+    # Two and a half minutes: installing three advisory tools and reading their
+    # configuration. Fifteen minutes is enough that a slow install is not reported
+    # as a policy failure.
+    timeout-minutes: 15
     steps:
       - name: Check out the repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

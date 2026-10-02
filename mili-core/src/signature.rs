@@ -33,6 +33,7 @@
 //! costs, and it is the reason mili does not wrap signatures in the streaming
 //! format.
 
+use core::mem::size_of;
 use ed25519_dalek::Signer as _;
 use hybrid_array::Array;
 use ml_dsa::{
@@ -46,28 +47,48 @@ use crate::secret::SecretBytes;
 use crate::Error;
 
 /// Length in bytes of a composite signing key.
-pub const SIGNING_KEY_SIZE: usize = 64;
+pub const SIGNING_KEY_SIZE: usize = ML_DSA65_SEED_SIZE + ED25519_SEED_SIZE;
 
 /// Length in bytes of a composite verifying key.
-pub const VERIFYING_KEY_SIZE: usize = 1984;
+pub const VERIFYING_KEY_SIZE: usize = ML_DSA65_VERIFYING_KEY_SIZE + ED25519_VERIFYING_KEY_SIZE;
+
+// The lengths below are stated in terms of the upstream crates rather than written
+// out, because a hand-written literal is only correct for one version of the
+// dependency. `hybrid_array::Array` is `repr(transparent)` over `[u8; N]`, so its
+// size is its length, and `ed25519_dalek` exports the three lengths it uses.
+//
+// This was not hypothetical. `ml_dsa_bytes`, `ml_dsa_signature_bytes` and
+// `encoded_signature` used to copy into an array of a literal length, which panics
+// when the lengths disagree, so an upstream size change would have become a panic on
+// a library path — in a crate whose threat model says there is not one. The
+// constants are now the upstream lengths, so there is nothing left to disagree.
+//
+// `size_of` and a path to a constant are both evaluated at compile time, so these
+// are still constants and the ABI is unchanged. The absolute values are pinned by
+// `sizes_are_the_documented_ones`, so a change upstream shows up as a failing test
+// in this crate rather than a silent adoption of whatever a new version says.
+//
+// `ML_DSA65_SEED_SIZE` is the one length that stays a literal, because ml-dsa
+// exposes the expanded signing key's length rather than the seed's. It is checked
+// by the same test, against what `MlDsa65::new` accepts.
 
 /// Length in bytes of the ML-DSA-65 seed inside a signing key.
 pub const ML_DSA65_SEED_SIZE: usize = 32;
 
 /// Length in bytes of the ML-DSA-65 public key inside a verifying key.
-pub const ML_DSA65_VERIFYING_KEY_SIZE: usize = 1952;
+pub const ML_DSA65_VERIFYING_KEY_SIZE: usize = size_of::<EncodedVerifyingKey<MlDsa65>>();
 
 /// Length in bytes of the Ed25519 seed inside a signing key.
-pub const ED25519_SEED_SIZE: usize = 32;
+pub const ED25519_SEED_SIZE: usize = ed25519_dalek::SECRET_KEY_LENGTH;
 
 /// Length in bytes of the Ed25519 public key inside a verifying key.
-pub const ED25519_VERIFYING_KEY_SIZE: usize = 32;
+pub const ED25519_VERIFYING_KEY_SIZE: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 
 /// Length in bytes of the ML-DSA-65 signature half.
-pub const ML_DSA65_SIGNATURE_SIZE: usize = 3309;
+pub const ML_DSA65_SIGNATURE_SIZE: usize = size_of::<EncodedSignature<MlDsa65>>();
 
 /// Length in bytes of the Ed25519 signature half.
-pub const ED25519_SIGNATURE_SIZE: usize = 64;
+pub const ED25519_SIGNATURE_SIZE: usize = ed25519_dalek::SIGNATURE_LENGTH;
 
 /// Length in bytes of the two component signatures inside a composite signature.
 ///
@@ -435,7 +456,7 @@ impl<'a> SignatureFile<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        transcript, ED25519_SIGNATURE_SIZE, ED25519_VERIFYING_KEY_SIZE, LABEL,
+        transcript, ED25519_SEED_SIZE, ED25519_SIGNATURE_SIZE, ED25519_VERIFYING_KEY_SIZE, LABEL,
         ML_DSA65_SIGNATURE_SIZE, ML_DSA65_VERIFYING_KEY_SIZE, OID, SIGNATURE_PAYLOAD_SIZE,
         SIGNATURE_SIZE, SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
     };
@@ -503,12 +524,19 @@ mod tests {
     }
 
     #[test]
-    fn sizes_match_the_specification() {
+    fn sizes_are_the_documented_ones() {
+        // The constants are now defined in terms of the upstream crates, so this
+        // test no longer proves they agree with those crates. It pins the absolute
+        // values, which is the other half: an upstream release that changes a size
+        // fails here instead of silently becoming mili's format version, because a
+        // mili file written by one build has to be readable by the other.
         assert_eq!(SIGNING_KEY_SIZE, 64);
         assert_eq!(VERIFYING_KEY_SIZE, 1984);
         assert_eq!(SIGNATURE_PAYLOAD_SIZE, 3373);
         assert_eq!(SIGNATURE_SIZE, 3379);
+        assert_eq!(ML_DSA65_SEED_SIZE, 32);
         assert_eq!(ML_DSA65_VERIFYING_KEY_SIZE, 1952);
+        assert_eq!(ED25519_SEED_SIZE, 32);
         assert_eq!(ED25519_VERIFYING_KEY_SIZE, 32);
         assert_eq!(ML_DSA65_SIGNATURE_SIZE, 3309);
         assert_eq!(ED25519_SIGNATURE_SIZE, 64);
@@ -519,6 +547,47 @@ mod tests {
         assert_eq!(
             ML_DSA65_SIGNATURE_SIZE + ED25519_SIGNATURE_SIZE,
             SIGNATURE_PAYLOAD_SIZE
+        );
+    }
+
+    #[test]
+    fn seed_lengths_are_the_ones_the_upstream_types_produce() {
+        // ML_DSA65_SEED_SIZE is the one length left as a literal, because ml-dsa
+        // publishes the expanded signing key's length and not the seed's. So
+        // instead of trusting the literal, produce a real key and signature and
+        // check that the sizes mili hands to a caller are the sizes upstream
+        // produced. That is the property the C ABI depends on anyway: a caller
+        // allocates `VERIFYING_KEY_SIZE` and `SIGNATURE_SIZE` and mili has to fill
+        // exactly that many bytes.
+        let mut seed = [0xA5u8; SIGNING_KEY_SIZE];
+        seed[..ML_DSA65_SEED_SIZE].copy_from_slice(&[0xA5; ML_DSA65_SEED_SIZE]);
+        seed[ML_DSA65_SEED_SIZE..].copy_from_slice(&[0x5A; ED25519_SEED_SIZE]);
+        let key = SigningKey::from_bytes(seed);
+        assert_eq!(key.to_bytes().len(), SIGNING_KEY_SIZE);
+
+        let verifying_key = key.verifying_key().to_bytes();
+        assert_eq!(verifying_key.len(), VERIFYING_KEY_SIZE);
+        assert_eq!(
+            &verifying_key[..ML_DSA65_VERIFYING_KEY_SIZE].len(),
+            &ML_DSA65_VERIFYING_KEY_SIZE
+        );
+        assert_eq!(
+            verifying_key[ML_DSA65_VERIFYING_KEY_SIZE..].len(),
+            ED25519_VERIFYING_KEY_SIZE
+        );
+
+        let signature = key
+            .sign(b"a message")
+            .expect("signing with a fresh key succeeds");
+        assert_eq!(signature.len(), SIGNATURE_SIZE);
+        assert_eq!(signature.len() - HEADER_SIZE, SIGNATURE_PAYLOAD_SIZE);
+        assert_eq!(
+            &signature[HEADER_SIZE..HEADER_SIZE + ML_DSA65_SIGNATURE_SIZE].len(),
+            &ML_DSA65_SIGNATURE_SIZE
+        );
+        assert_eq!(
+            signature.len() - HEADER_SIZE - ML_DSA65_SIGNATURE_SIZE,
+            ED25519_SIGNATURE_SIZE
         );
     }
 

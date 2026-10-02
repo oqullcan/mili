@@ -27,10 +27,10 @@ cd fuzz && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup
 ```
 
 `cargo test` takes about four minutes, dominated by Argon2id in the key file tests
-and one ML-KEM operation per property case. The miri job takes about six.
+and one ML-KEM operation per property case. The miri job takes about eleven.
 
 A full `cargo test --workspace` run is the gate for anything touching a format.
-The five fuzz targets each need a campaign worth the name run by a person; CI runs
+The six fuzz targets each need a campaign worth the name run by a person; CI runs
 one minute per target as a smoke test that the target still reaches its parser.
 See `fuzz/README.md`.
 

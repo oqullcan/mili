@@ -23,22 +23,37 @@
 //! generator, so there is no caller-reachable path to weaker or predictable
 //! randomness.
 
+use core::mem::size_of;
 use x_wing::{Decapsulate, Decapsulator, KeyExport};
 
 use crate::secret::SecretBytes;
 use crate::Error;
 
+// These three are stated in terms of `x_wing` rather than written out, for the
+// reason `signature.rs` gives in full: a literal is only correct for one version of
+// the dependency, and `EncapsulationKey::decapsulate` slices the ciphertext to
+// `KEM_CIPHERTEXT_SIZE` before handing it to the upstream decapsulator. If the two
+// disagreed, `x_wing` would reject a ciphertext that was the right length, with no
+// indication that mili's own constant was the cause.
+//
+// The absolute values are pinned by `sizes_are_the_documented_ones`.
+
 /// Length in bytes of an X-Wing decapsulation key seed.
-pub const SEALING_KEY_SIZE: usize = 32;
+pub const SEALING_KEY_SIZE: usize = x_wing::DECAPSULATION_KEY_SIZE;
 
 /// Length in bytes of an X-Wing encapsulation key.
-pub const ENCAPSULATION_KEY_SIZE: usize = 1216;
+pub const ENCAPSULATION_KEY_SIZE: usize = x_wing::ENCAPSULATION_KEY_SIZE;
 
 /// Length in bytes of an X-Wing KEM ciphertext.
-pub(crate) const KEM_CIPHERTEXT_SIZE: usize = 1120;
+pub(crate) const KEM_CIPHERTEXT_SIZE: usize = x_wing::CIPHERTEXT_SIZE;
 
 /// Length in bytes of an X-Wing shared secret.
-pub(crate) const SHARED_SECRET_SIZE: usize = 32;
+///
+/// `x_wing::SharedKey` is `hybrid_array::Array<u8, U32>`, so its length is 32 and
+/// this is that length rather than a number that has to be kept in step with it.
+/// `decapsulate` copies one into `SecretBytes<SHARED_SECRET_SIZE>` with
+/// `copy_from_slice`, which panics on a length mismatch.
+pub(crate) const SHARED_SECRET_SIZE: usize = size_of::<x_wing::SharedKey>();
 
 /// An X-Wing decapsulation key.
 ///
@@ -201,7 +216,10 @@ impl core::fmt::Debug for EncapsulationKey {
 mod tests {
     #[cfg(not(miri))]
     use super::EncapsulationKey;
-    use super::{SealingKey, ENCAPSULATION_KEY_SIZE, SEALING_KEY_SIZE};
+    use super::{
+        SealingKey, ENCAPSULATION_KEY_SIZE, KEM_CIPHERTEXT_SIZE, SEALING_KEY_SIZE,
+        SHARED_SECRET_SIZE,
+    };
     use crate::Error;
     #[cfg(not(miri))]
     #[cfg(not(miri))]
@@ -418,9 +436,28 @@ mod tests {
     }
 
     #[test]
-    fn documented_sizes_match_the_specification() {
+    fn sizes_are_the_documented_ones() {
+        // `SEALING_KEY_SIZE`, `ENCAPSULATION_KEY_SIZE` and `KEM_CIPHERTEXT_SIZE` are
+        // now read from `x_wing`, so these are the other half of the check: they
+        // pin the absolute values, so a new `x_wing` release that changes a size
+        // fails here rather than silently becoming mili's format version.
         assert_eq!(SEALING_KEY_SIZE, 32);
         assert_eq!(ENCAPSULATION_KEY_SIZE, 1216);
+        assert_eq!(KEM_CIPHERTEXT_SIZE, 1120);
+        assert_eq!(SHARED_SECRET_SIZE, 32);
+
+        // And a produced key agrees with the constant, so the derivation and the
+        // producer cannot drift apart even if a constant is edited by hand.
+        let key = SealingKey::generate().expect("OS randomness is available");
+        assert_eq!(
+            key.encapsulation_key().to_bytes().len(),
+            ENCAPSULATION_KEY_SIZE
+        );
+        let (ciphertext, shared) = key.encapsulation_key().encapsulate();
+        assert_eq!(ciphertext.len(), KEM_CIPHERTEXT_SIZE);
+        // SHARED_SECRET_SIZE needs no assertion: encapsulate returns
+        // SecretBytes<SHARED_SECRET_SIZE>, so the length is the type argument.
+        let _: crate::secret::SecretBytes<SHARED_SECRET_SIZE> = shared;
     }
 
     #[test]
