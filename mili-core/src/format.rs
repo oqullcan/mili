@@ -100,12 +100,20 @@ pub(crate) fn exact_length(header: usize, body: usize, tag: usize) -> Option<usi
 /// Parses a file that carries a 32 byte salt at [`SALT_OFFSET`].
 ///
 /// `body` is everything after the salt.
+///
+/// The floor is `SALT_END` as well as the caller's `minimum_length`, for the same
+/// reason `parse_fields` floors at [`FIELDS_OFFSET`]: this function reads
+/// `file[SALT_OFFSET..SALT_END]`, so it is responsible for establishing that there
+/// are that many bytes. Both callers pass a `minimum_length` far above it — a
+/// sealed box needs 1174 and a stream header 1158 — so the floor is never the
+/// binding constraint today and the asymmetry with `parse_fields` was invisible.
+/// Relying on that means the next caller inherits a panic.
 pub(crate) fn parse_with_salt<'a>(
     file: &'a [u8],
     format_type: u8,
     minimum_length: usize,
 ) -> Result<Prefix<'a>, Error> {
-    if file.len() < minimum_length {
+    if file.len() < minimum_length.max(SALT_END) {
         return Err(Error::Failed);
     }
     let body = parse_fields(file, format_type, minimum_length)?;
@@ -202,6 +210,45 @@ mod tests {
             assert!(parse_with_salt(&buffer[..len], SEALED_BOX, SALT_END + 3).is_err());
             assert!(parse_fields(&buffer[..len], SEALED_BOX, SALT_END + 3).is_err());
         }
+    }
+
+    #[test]
+    fn each_parser_establishes_its_own_floor() {
+        // `parse_fields` reads `file[4]`, `file[5]` and then `[FIELDS_OFFSET..]`;
+        // `parse_with_salt` reads `[SALT_OFFSET..SALT_END]`. Each floors at its own
+        // offset, so a caller cannot talk either of them into reading past the end
+        // by asking for less than the function's own requirement.
+        //
+        // Without the floor, asking for zero bytes of a 20 byte file passed the
+        // caller's check and then sliced `[6..38]`. That is unreachable from mili —
+        // both callers ask for 1158 or more — which is exactly why it survived: no
+        // test could reach it either, because a test would have to ask for a
+        // `minimum_length` no real caller uses.
+        let buffer = file(SEALED_BOX, VERSION, &[7u8; SALT_SIZE], &[1, 2, 3]);
+
+        for asked in 0..=FIELDS_OFFSET {
+            for short in 0..FIELDS_OFFSET {
+                assert!(
+                    parse_fields(&buffer[..short], SEALED_BOX, asked).is_err(),
+                    "parse_fields accepted a {short} byte file when asked for {asked}"
+                );
+            }
+        }
+
+        for asked in 0..=SALT_END {
+            for short in 0..SALT_END {
+                assert!(
+                    parse_with_salt(&buffer[..short], SEALED_BOX, asked).is_err(),
+                    "parse_with_salt accepted a {short} byte file when asked for {asked}"
+                );
+            }
+        }
+
+        // At the floor the file is long enough, so the answer now depends on the
+        // file rather than on the ask: a full salt is parsed, and the same file one
+        // byte short of a full salt is not.
+        assert!(parse_with_salt(&buffer[..SALT_END], SEALED_BOX, 0).is_ok());
+        assert!(parse_with_salt(&buffer[..SALT_END - 1], SEALED_BOX, 0).is_err());
     }
 
     #[test]

@@ -800,6 +800,309 @@ mod tests {
         assert!(matches!(result, Err(Error::Failed)));
     }
 
+    // Every bound `parse_entries` enforces, tested against the function directly.
+    //
+    // None of these could be reached through `Backup::open`, because the entry
+    // region is authenticated before it is parsed: a test that changes a length
+    // field in the container file breaks the tag and is rejected earlier, at the
+    // AEAD, having proved nothing about the parser. That is not a small
+    // inconvenience. It means the checks below, which are the ones that stand
+    // between a malformed region and an out-of-bounds slice, could each have been
+    // deleted and the whole suite would still pass — which is exactly what the
+    // test named `an_inflated_entry_count_is_rejected` did, until it was noticed
+    // that it never reached the count bound it was written for.
+    //
+    // So they are tested here, on regions built by hand rather than by a writer.
+    // A writer cannot produce these, which is the point: they are the parser's
+    // answer to a container written by a different implementation of this format.
+    //
+    // Each test states the bound from both sides, because a bound that rejects
+    // everything is as wrong as one that rejects nothing.
+
+    /// One entry: `key_id_len(2) || key_id(16) || entry_len(4) || payload`.
+    fn entry(key_id: u8, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        out.extend_from_slice(&[key_id; KEY_ID_SIZE]);
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// One payload: `payload_type(1) || payload_len(4) || body`.
+    fn payload(payload_type: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(payload_type);
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A sealing payload, which is the shortest well-formed one.
+    fn sealing_payload() -> Vec<u8> {
+        payload(crate::keyfile::PAYLOAD_SEALING, &[0xA5; 32])
+    }
+
+    #[test]
+    fn a_region_is_parsed_when_every_entry_is_well_formed() {
+        let region = [
+            entry(0x01, &sealing_payload()),
+            entry(0x02, &sealing_payload()),
+            entry(0x03, &sealing_payload()),
+        ]
+        .concat();
+        let entries = parse_entries(&region, 3).expect("three well-formed entries");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(ids(&entries), vec![[0x01; 16], [0x02; 16], [0x03; 16]]);
+
+        // The same region with the count of one entry is not a valid reading of
+        // it, which is what the trailing-byte check is for.
+        assert!(parse_entries(&region, 1).is_err());
+    }
+
+    #[test]
+    fn an_empty_region_is_zero_entries_and_nothing_else() {
+        assert!(parse_entries(&[], 0).expect("zero entries").is_empty());
+        // One entry needs its 22 byte prefix before it needs anything else.
+        assert!(parse_entries(&[], 1).is_err());
+    }
+
+    #[test]
+    fn a_count_that_cannot_fit_the_region_is_rejected() {
+        // A sealing payload is 1 type byte + 4 length bytes + a 32 byte key, so an
+        // entry is 22 + 37 = 59 bytes. The count check is `count * 22 > len`, so
+        // for a 118 byte region the largest count it admits is 118 / 22 = 5, and
+        // one more is refused.
+        let one = entry(0x01, &sealing_payload());
+        assert_eq!(one.len(), 59);
+        let two = entry(0x02, &sealing_payload());
+        let region = [one, two].concat();
+        assert_eq!(region.len(), 118);
+
+        // Two entries is a valid reading.
+        assert_eq!(parse_entries(&region, 2).expect("two entries").len(), 2);
+
+        // Five is admitted by the count check, since 5 * 22 = 110 <= 118. It is
+        // still refused, but later, for a missing third entry — which is the
+        // point: the count check is the cheapest of the three and the others have
+        // to catch what it lets through.
+        assert!(parse_entries(&region, 5).is_err());
+
+        // Six is the first count the check itself refuses: 6 * 22 = 132 > 118.
+        assert!(parse_entries(&region, 6).is_err());
+    }
+
+    #[test]
+    fn an_entry_prefix_that_does_not_fit_the_remaining_region_is_rejected() {
+        // A well-formed entry is 59 bytes. A 64 byte region holds that one entry
+        // plus 5 bytes, and 5 is fewer than the 22 bytes a second entry's prefix
+        // needs. The count check admits two, because 2 * 22 = 44 <= 64, so this is
+        // the check that has to catch it.
+        let first = entry(0x01, &sealing_payload());
+        assert_eq!(first.len(), 59);
+        let mut region = first.clone();
+        region.extend_from_slice(&[0u8; 5]);
+        assert_eq!(region.len(), 64);
+        assert!(parse_entries(&region, 2).is_err());
+
+        // Seventeen bytes more and the prefix fits, so the refusal moves on to the
+        // key identifier length: 48 + 22 = 70 leaves exactly a 22 byte prefix, and
+        // 22 zero bytes read as a key_id_len of 0, which is not 16. This shows the
+        // missing-prefix complaint is gone rather than masked by an earlier one.
+        let mut roomy = first.clone();
+        roomy.extend_from_slice(&[0u8; 22]);
+        assert_eq!(roomy.len(), 81);
+        assert!(parse_entries(&roomy, 2).is_err());
+
+        // And the entry on its own is fine, which is what makes the two refusals
+        // above about the second entry rather than the first.
+        assert_eq!(parse_entries(&first, 1).expect("one entry").len(), 1);
+    }
+
+    #[test]
+    fn an_identifier_length_other_than_sixteen_is_rejected() {
+        // The length is written even though mili only ever writes 16, so that a
+        // future version can widen it without a format change. Anything but 16 is
+        // refused rather than skipped, from both sides of the value.
+        for wrong in [0u16, 1, 15, 17, 20, u16::MAX] {
+            let mut region = Vec::new();
+            region.extend_from_slice(&wrong.to_be_bytes());
+            region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+            region.extend_from_slice(&(37u32).to_be_bytes());
+            region.extend_from_slice(&sealing_payload());
+            assert!(
+                parse_entries(&region, 1).is_err(),
+                "key_id_len {wrong} was accepted"
+            );
+        }
+
+        let mut region = Vec::new();
+        region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        region.extend_from_slice(&(37u32).to_be_bytes());
+        region.extend_from_slice(&sealing_payload());
+        assert!(parse_entries(&region, 1).is_ok());
+    }
+
+    #[test]
+    fn an_entry_length_longer_than_the_region_is_rejected() {
+        // The entry claims 200 bytes of payload and supplies 37. `available` is
+        // what is left after the prefix, so the claim is checked against what the
+        // region actually holds.
+        let mut region = Vec::new();
+        region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        region.extend_from_slice(&200u32.to_be_bytes());
+        region.extend_from_slice(&sealing_payload());
+        assert!(parse_entries(&region, 1).is_err());
+
+        // Claiming exactly what is there is accepted, so the bound is `>` and not
+        // `>=`.
+        let mut exact = Vec::new();
+        exact.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        exact.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        exact.extend_from_slice(&(sealing_payload().len() as u32).to_be_bytes());
+        exact.extend_from_slice(&sealing_payload());
+        assert!(parse_entries(&exact, 1).is_ok());
+    }
+
+    #[test]
+    fn bytes_after_the_last_entry_are_rejected() {
+        // Every entry is consumed exactly, so a region that says four entries and
+        // holds three is refused rather than the extra one being ignored.
+        let mut region = [
+            entry(0x01, &sealing_payload()),
+            entry(0x02, &sealing_payload()),
+        ]
+        .concat();
+        assert!(parse_entries(&region, 2).is_ok());
+        region.extend_from_slice(&sealing_payload());
+        assert!(parse_entries(&region, 2).is_err());
+        // And one byte is enough.
+        region.truncate(118 + 1);
+        assert!(parse_entries(&region, 2).is_err());
+    }
+
+    #[test]
+    fn a_payload_shorter_than_its_own_prefix_is_rejected() {
+        // `PAYLOAD_OVERHEAD` is a type byte and a length. Below that there is
+        // nothing to read, so each length from zero to one under is refused.
+        for short in 0..PAYLOAD_OVERHEAD {
+            let mut region = Vec::new();
+            region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+            region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+            region.extend_from_slice(&(short as u32).to_be_bytes());
+            region.extend_from_slice(&vec![0xA5; short]);
+            assert!(
+                parse_entries(&region, 1).is_err(),
+                "a {short} byte payload was accepted"
+            );
+        }
+        // Exactly `PAYLOAD_OVERHEAD` gets past this check, and is then refused for
+        // the reason the type-specific check gives: an empty body is not a key.
+        let mut region = Vec::new();
+        region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        region.extend_from_slice(&(PAYLOAD_OVERHEAD as u32).to_be_bytes());
+        region.extend_from_slice(&payload(crate::keyfile::PAYLOAD_SEALING, &[]));
+        assert!(parse_entries(&region, 1).is_err());
+    }
+
+    #[test]
+    fn a_payload_longer_than_the_largest_key_is_rejected() {
+        // `MAX_KEY_SIZE` is the signing key's length, so a signing payload is the
+        // one shape that can reach the ceiling without a type check refusing it
+        // first. A 65 byte signing body is self-consistent — the declared length
+        // matches what follows — so only the ceiling can refuse it, which is what
+        // makes this the test for the ceiling and not for the agreement check.
+        let mut over = Vec::new();
+        over.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        over.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        let big = payload(crate::keyfile::PAYLOAD_SIGNING, &[0xA5; MAX_KEY_SIZE + 1]);
+        assert_eq!(big.len(), PAYLOAD_OVERHEAD + MAX_KEY_SIZE + 1);
+        over.extend_from_slice(&(big.len() as u32).to_be_bytes());
+        over.extend_from_slice(&big);
+        assert!(parse_entries(&over, 1).is_err());
+
+        // Exactly the ceiling is a valid signing key and is accepted, so the
+        // bound is `>` and the rejection above was the ceiling's doing.
+        let mut at = Vec::new();
+        at.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        at.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        let exact = payload(crate::keyfile::PAYLOAD_SIGNING, &[0xA5; MAX_KEY_SIZE]);
+        assert_eq!(exact.len(), PAYLOAD_OVERHEAD + MAX_KEY_SIZE);
+        assert_eq!(MAX_KEY_SIZE, SIGNING_KEY_SIZE);
+        at.extend_from_slice(&(exact.len() as u32).to_be_bytes());
+        at.extend_from_slice(&exact);
+        assert_eq!(
+            parse_entries(&at, 1).expect("a 64 byte signing key").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_payload_length_that_does_not_match_its_key_type_is_rejected() {
+        // Each type has one length, and the declared length must be that length.
+        // `limit - 1` and `limit + 1` are both refused for all three.
+        for (payload_type, size) in [
+            (crate::keyfile::PAYLOAD_SEALING, crate::SEALING_KEY_SIZE),
+            (crate::keyfile::PAYLOAD_SIGNING, SIGNING_KEY_SIZE),
+            (crate::keyfile::PAYLOAD_SYMMETRIC, SYMMETRIC_KEY_SIZE),
+        ] {
+            for wrong in [size - 1, size + 1] {
+                let body = vec![0xA5; wrong];
+                let mut region = Vec::new();
+                region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+                region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+                let body_bytes = payload(payload_type, &body);
+                region.extend_from_slice(&(body_bytes.len() as u32).to_be_bytes());
+                region.extend_from_slice(&body_bytes);
+                assert!(
+                    parse_entries(&region, 1).is_err(),
+                    "type {payload_type} accepted a {wrong} byte key, expected {size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_payload_of_an_unknown_type_is_rejected() {
+        let mut region = Vec::new();
+        region.extend_from_slice(&(KEY_ID_SIZE as u16).to_be_bytes());
+        region.extend_from_slice(&[0x01; KEY_ID_SIZE]);
+        let unknown = payload(0x09, &[0xA5; 32]);
+        region.extend_from_slice(&(unknown.len() as u32).to_be_bytes());
+        region.extend_from_slice(&unknown);
+        assert!(parse_entries(&region, 1).is_err());
+    }
+
+    #[test]
+    fn two_entries_under_one_identifier_are_rejected_when_reading() {
+        // `from_keys` refuses a duplicate on the way in. This is the same rule on
+        // the way out, and it is the one that matters: a container written by
+        // another implementation of this format is not obliged to have been built
+        // by mili, and the identifier's only purpose is to tell entries apart. A
+        // write-side-only rule would hand a caller two keys under one identifier
+        // with nothing to notice it by.
+        let region = [
+            entry(0x07, &sealing_payload()),
+            entry(0x07, &sealing_payload()),
+        ]
+        .concat();
+        assert!(parse_entries(&region, 2).is_err());
+
+        // One byte different in either identifier is a different identifier.
+        let almost = [
+            entry(0x07, &sealing_payload()),
+            entry(0x06, &sealing_payload()),
+        ]
+        .concat();
+        assert_eq!(
+            parse_entries(&almost, 2).expect("two distinct ids").len(),
+            2
+        );
+    }
+
     #[test]
     #[cfg(not(miri))]
     fn a_wrong_password_is_rejected() {

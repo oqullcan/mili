@@ -120,6 +120,20 @@ pub const PAYLOAD_SIGNING: u8 = 0x02;
 /// The payload type of a symmetric key.
 pub const PAYLOAD_SYMMETRIC: u8 = 0x03;
 
+/// The largest payload a key file may declare, in bytes.
+///
+/// A composite signing key is the largest key mili stores, and this is its length.
+/// The value is named rather than written as `64` at the check, because the check
+/// and the three payload types it has to accommodate are otherwise independent: a
+/// reader has no way to see that the bound is `SIGNING_KEY_SIZE` rather than a
+/// guess, and a fourth payload type larger than a signing key would need this
+/// raised without anyone noticing what else moves with it.
+///
+/// This is the largest the *declared* length may be. The payload type still
+/// decides the exact length afterwards, so this bounds the file and the padding
+/// buffer rather than admitting a 64 byte sealing key.
+pub const MAX_PAYLOAD_SIZE: usize = SIGNING_KEY_SIZE;
+
 /// Offset of the `kdf_id` field.
 pub(crate) const KDF_ID_OFFSET: usize = 6;
 
@@ -567,7 +581,7 @@ impl Header {
         let p_cost = read_u32(file, P_COST_OFFSET)?;
         let payload_len = read_u32(file, PAYLOAD_LEN_OFFSET)? as usize;
 
-        if payload_len > 64 {
+        if payload_len > MAX_PAYLOAD_SIZE {
             return Err(Error::Failed);
         }
         match format::exact_length(HEADER_SIZE, payload_len, TAG_SIZE) {
@@ -738,11 +752,11 @@ mod tests {
     #![cfg_attr(miri, allow(unused))]
     use super::{build_header, wrap_key_for, AeadKey, AeadNonce};
     use super::{
-        check_params, derive_kek, key_id_of, KeyFile, ARGON2_SALT_SIZE, HEADER_SIZE, KDF_ARGON2ID,
-        KDF_ID_OFFSET, KEY_ID_SIZE, M_COST, M_COST_CEILING, M_COST_FLOOR, M_COST_OFFSET,
-        PARAMS_ID_OFFSET, PAYLOAD_SEALING, PAYLOAD_SIGNING, PAYLOAD_SYMMETRIC, PROFILE, PROFILE_ID,
-        P_COST, P_COST_CEILING, P_COST_FLOOR, P_COST_OFFSET, T_COST, T_COST_CEILING, T_COST_FLOOR,
-        T_COST_OFFSET,
+        check_params, derive_kek, format, key_id_of, Header, KeyFile, ARGON2_SALT_SIZE,
+        HEADER_SIZE, KDF_ARGON2ID, KDF_ID_OFFSET, KEY_ID_SIZE, MAX_PAYLOAD_SIZE, M_COST,
+        M_COST_CEILING, M_COST_FLOOR, M_COST_OFFSET, PARAMS_ID_OFFSET, PAYLOAD_SEALING,
+        PAYLOAD_SIGNING, PAYLOAD_SYMMETRIC, PROFILE, PROFILE_ID, P_COST, P_COST_CEILING,
+        P_COST_FLOOR, P_COST_OFFSET, T_COST, T_COST_CEILING, T_COST_FLOOR, T_COST_OFFSET,
     };
     use crate::aead::TAG_SIZE;
     use crate::{
@@ -1142,6 +1156,62 @@ mod tests {
         }
     }
 
+    /// The declared payload length is bounded before anything is sized from it.
+    ///
+    /// `KeyFile::wrap` only ever writes a 32 or a 64 byte payload, so no test that
+    /// goes through a writer could reach this bound: the largest declared length a
+    /// writer produces is 64, and the check refuses anything above it. It is
+    /// reachable only by a container written by something else, which is the case
+    /// it exists for.
+    ///
+    /// `Header::parse` is called directly so the refusal can be attributed. Every
+    /// key file failure is `Error::Failed`, so testing through `open_*` could not
+    /// distinguish this bound refusing a 65 byte declaration from the AEAD refusing
+    /// a file with a garbage tag, and a test that cannot tell those apart is not
+    /// testing this.
+    #[test]
+    fn a_declared_payload_length_above_the_largest_key_is_refused() {
+        assert_eq!(MAX_PAYLOAD_SIZE, SIGNING_KEY_SIZE);
+
+        // A file whose header declares a payload and whose body is that long, so
+        // the declared-length ceiling is the only thing that can object.
+        let file_with_declared_length = |payload_len: usize| {
+            let mut file = build_header(
+                PAYLOAD_SIGNING,
+                payload_len,
+                &[0x3Cu8; ARGON2_SALT_SIZE],
+                M_COST,
+                T_COST,
+                P_COST,
+            );
+            file.extend_from_slice(&vec![0xA5u8; payload_len]);
+            file.extend_from_slice(&[0x5Au8; TAG_SIZE]);
+            assert_eq!(
+                file.len(),
+                format::exact_length(HEADER_SIZE, payload_len, TAG_SIZE).expect("no overflow"),
+                "the file must be exactly as long as the header claims, or the \
+                 ceiling is not the check under test"
+            );
+            file
+        };
+
+        // The ceiling itself is accepted as a declaration.
+        assert!(Header::parse(&file_with_declared_length(MAX_PAYLOAD_SIZE)).is_ok());
+
+        // One byte over is refused, and so is every length above it.
+        for payload_len in [
+            MAX_PAYLOAD_SIZE + 1,
+            MAX_PAYLOAD_SIZE + 2,
+            1_000,
+            u16::MAX as usize,
+        ] {
+            assert!(
+                Header::parse(&file_with_declared_length(payload_len)).is_err(),
+                "a declared payload length of {payload_len} was accepted"
+            );
+        }
+    }
+
     /// The matching length opens, so the check above is not simply refusing
     /// everything.
     #[test]
@@ -1464,20 +1534,50 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn the_floor_and_ceiling_are_inclusive() {
-        for m_cost in [M_COST_FLOOR, M_COST_CEILING] {
-            let mut bytes = KeyFile::from_sealing_key(&sealing(), PASSWORD)
-                .expect("wrap")
-                .as_bytes()
-                .to_vec();
-            bytes[8..12].copy_from_slice(&m_cost.to_be_bytes());
-            // The parameters no longer match the wrap, so the payload will not
-            // authenticate, but the file must get past the parameter check and
-            // fail on the AEAD rather than on the bound.
-            let file = KeyFile::from_bytes(&bytes).expect("parses");
-            assert!(
-                matches!(file.open_sealing_key(PASSWORD), Err(Error::Failed)),
-                "m_cost {m_cost} should be accepted by the bounds and fail later"
-            );
+        // The load-bearing assertion here is that `from_bytes` succeeds. It calls
+        // `Header::parse`, which calls `check_params`, so a value the bounds refuse
+        // fails this test at that point rather than at the `open_*` below. That
+        // ordering is the whole point: the bounds have to be reached before
+        // anything is sized from them, and a test that only checked `open_*` could
+        // not tell "accepted by the bounds, refused by the tag" from "refused by
+        // the bounds", because both are `Error::Failed`.
+        //
+        // `check_params` is called directly, for all six bounds, in
+        // `the_accepted_range_is_inclusive_at_both_ends`. This one is the
+        // end-to-end counterpart, so it covers all three parameters here too and
+        // leaves the later AEAD refusal as a second line of defence rather than the
+        // first.
+        for (offset, values) in [
+            (M_COST_OFFSET, [M_COST_FLOOR, M_COST_CEILING]),
+            (T_COST_OFFSET, [T_COST_FLOOR, T_COST_CEILING]),
+            (P_COST_OFFSET, [P_COST_FLOOR, P_COST_CEILING]),
+        ] {
+            for value in values {
+                let mut bytes = KeyFile::from_sealing_key(&sealing(), PASSWORD)
+                    .expect("wrap")
+                    .as_bytes()
+                    .to_vec();
+                bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+
+                let parsed = KeyFile::from_bytes(&bytes);
+                assert!(
+                    parsed.is_ok(),
+                    "the parameter at offset {offset} accepted neither {value} \
+                     at the bound: {}",
+                    parsed.expect_err("the assert above reports it")
+                );
+
+                // The parameters no longer match the wrap, so the payload will not
+                // authenticate. That the file fails here rather than earlier is the
+                // second thing this test checks.
+                assert!(
+                    parsed
+                        .expect("just asserted")
+                        .open_sealing_key(PASSWORD)
+                        .is_err(),
+                    "the parameter at offset {offset} with value {value} parsed and opened"
+                );
+            }
         }
     }
 
