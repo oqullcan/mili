@@ -37,8 +37,17 @@
 //! wipes them when they are dropped. The allocation is fallible, so a caller
 //! whose system cannot provide 64 MiB gets an error rather than an abort.
 
+// `Algorithm`, `Argon2`, `Params`, `Version`, `Block` and `Zeroizing` are used
+// only by the real `derive_kek` and the `WorkingMemory` it allocates, both of
+// which are `#[cfg(not(miri))]`. Under miri they are unused and CI compiles
+// with `--deny warnings`, so they are gated with the code that needs them.
+// `Zeroize` is not gated: it is also the trait behind `payload.zeroize()` on a
+// parsed payload, which runs under miri.
+#[cfg(not(miri))]
 use argon2::{Algorithm, Argon2, Block, Params, Version};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
+#[cfg(not(miri))]
+use zeroize::Zeroizing;
 
 use crate::aead::{AeadKey, AeadNonce, TAG_SIZE};
 use crate::error::Error;
@@ -671,10 +680,15 @@ pub(crate) fn derive_kek(
 /// The allocating entry point of the `argon2` crate does not clear the blocks it
 /// uses, and those blocks hold the password's memory-hardness work product. This
 /// owns the allocation and clears it, including on the error paths.
+///
+/// Gated with the real `derive_kek` for the same reason as the imports above:
+/// nothing constructs it under miri, and CI denies the warning that would say so.
+#[cfg(not(miri))]
 struct WorkingMemory {
     blocks: Vec<Block>,
 }
 
+#[cfg(not(miri))]
 impl WorkingMemory {
     /// Allocates `count` zeroed 1 KiB blocks.
     fn new(count: usize) -> Result<Self, Error> {
@@ -687,6 +701,7 @@ impl WorkingMemory {
     }
 }
 
+#[cfg(not(miri))]
 impl Drop for WorkingMemory {
     fn drop(&mut self) {
         for block in &mut self.blocks {

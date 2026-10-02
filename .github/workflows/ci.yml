@@ -70,7 +70,7 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
 
       - name: Dependency policy
         run: cargo deny check
@@ -167,18 +167,34 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      # libFuzzer needs a nightly compiler. This is the one job that does not use
-      # the pinned toolchain, and it never links the result: nothing here
-      # produces a binary anyone runs.
-      - name: Install nightly
+      # libFuzzer needs a nightly compiler. This is the one job that does not use the
+      # pinned toolchain, and it never links the result: nothing here produces a
+      # binary anyone runs.
+      #
+      # The musl target is the part that is easy to lose. On this runner's
+      # cargo-fuzz, the build passed `--target x86_64-unknown-linux-musl`, which a
+      # GitHub runner does not ship, so the first dependency failed with
+      # "sanitizer is incompatible with statically linked libc" and then
+      # "can't find crate for `core`". Both messages name a symptom; the absent
+      # target is the cause. Installing it is the fix rather than disabling the
+      # sanitizer, because a fuzz job without a sanitizer is not the job.
+      - name: Install nightly with the musl target
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
+          targets: x86_64-unknown-linux-musl
 
+      # Pinned with cargo-vet and cargo-deny for the reason in SPEC.md section 16:
+      # a version is written down, not the newest one fetched. All three were
+      # installed unpinned and all three are worth pinning, because this repository
+      # has already been broken twice by a tool resolving to a version other than
+      # the one it was developed against — cargo-vet's store formatter and
+      # cargo-fuzz's target selection are both version-dependent behaviour rather
+      # than a stable interface.
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@0.13.2
 
       # The fuzz crate is outside the workspace, so it has its own lockfile and
       # its own dependency graph, and `cargo deny check` in the step below reads
@@ -187,7 +203,7 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2

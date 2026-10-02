@@ -10,14 +10,28 @@ inputs someone thought of. A fuzzer tries the ones nobody did.
 ## Running
 
 ```sh
-cargo install cargo-fuzz                 # once
-rustup toolchain install nightly         # libFuzzer needs a nightly compiler
+cargo install cargo-fuzz --version 0.13.2    # once
+rustup toolchain install nightly             # libFuzzer needs a nightly compiler
+rustup target add x86_64-unknown-linux-musl  # and cargo-fuzz builds for it
 cd fuzz
 
 cargo +nightly fuzz run open_backup
 cargo +nightly fuzz run open_key_file corpus/open_key_file
 cargo +nightly fuzz tui open_stream      # if you have a terminal
 ```
+
+The musl target is not optional on a bare machine. `cargo-fuzz` passes
+`--target x86_64-unknown-linux-musl` because ASan wants a statically linked
+binary, and without the target installed the build fails on its first
+dependency with `sanitizer is incompatible with statically linked libc`
+followed by `can't find crate for 'core'`. Neither message names the missing
+target, and the whole thing passes on a machine that happens to have it, so
+check it before concluding that a fuzz job works.
+
+The versions above are the ones this repository is developed against. An
+unpinned `cargo install cargo-fuzz` resolves to a different major version whose
+target selection and flags differ, and that shows up as a build failure rather
+than as a version message. See `SPEC.md` section 16.
 
 A crash lands in `fuzz/artifacts/<target>/` and is replayed with:
 
