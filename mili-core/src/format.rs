@@ -46,12 +46,27 @@ pub(crate) const SALT_END: usize = SALT_OFFSET + SALT_SIZE;
 /// Nothing here is a security check. The three bytes are public, and
 /// authentication happens in the AEAD step that follows. This function only
 /// decides whether the buffer is shaped like this format at all.
+///
+/// # The length guard
+///
+/// The three reads below index directly rather than through `get`, which is
+/// safe only if the guard above covers `FIELDS_OFFSET`. Every current caller
+/// passes a `minimum_length` of 57 or more, so the guard does, but that was a
+/// property of the call sites rather than of this function, and a future caller
+/// passing 4 would get a panic on a four byte file instead of an error.
+///
+/// `max` makes the function correct by construction rather than by caller
+/// discipline: a caller that asks for less than a header gets the same
+/// `Error::Failed` as one that asks for less than its own minimum. `clippy::
+/// indexing_slicing` is not enabled here, and enabling it would flag these reads
+/// along with every other slice in the crate without distinguishing the guarded
+/// ones, so the invariant is expressed in the guard instead.
 pub(crate) fn parse_fields(
     file: &[u8],
     format_type: u8,
     minimum_length: usize,
 ) -> Result<&[u8], Error> {
-    if file.len() < minimum_length {
+    if file.len() < minimum_length.max(FIELDS_OFFSET) {
         return Err(Error::Failed);
     }
     if file[..4] != MAGIC {
@@ -160,6 +175,24 @@ mod tests {
         let body = parse_fields(&buffer, SEALED_BOX, FIELDS_OFFSET + 1).expect("parses");
         assert_eq!(body.len(), buffer.len() - FIELDS_OFFSET);
         assert_eq!(&body[..SALT_SIZE], &[7u8; SALT_SIZE]);
+    }
+
+    #[test]
+    fn a_minimum_length_below_the_header_is_an_error_not_a_panic() {
+        // `parse_fields` indexes bytes 0 through 5 without a per-read check, so
+        // it has to reject anything shorter than FIELDS_OFFSET even when the
+        // caller asks for less. Every current caller passes 57 or more, which is
+        // why this was not previously observable; a caller that passed 4 would
+        // have panicked on a four byte file rather than returning an error.
+        let buffer = file(SEALED_BOX, VERSION, &[7u8; SALT_SIZE], &[1, 2, 3]);
+        for short in 0..FIELDS_OFFSET {
+            for asked in 0..FIELDS_OFFSET {
+                assert!(
+                    parse_fields(&buffer[..short], SEALED_BOX, asked).is_err(),
+                    "a {short} byte file asked for as {asked} bytes was not rejected"
+                );
+            }
+        }
     }
 
     #[test]

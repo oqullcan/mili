@@ -218,6 +218,38 @@ Two of those notes are partial and say so in their own text: `libc` and
 which was not, and why that boundary is a checkable claim about reachability
 rather than a matter of how long the file is.
 
+`SECURITY.md` is the file behind the repository's security policy setting, so a
+report lands in GitHub's private advisory flow rather than in a public issue.
+Private vulnerability reporting and secret scanning are both enabled; secret
+scanning has push protection, so a push containing a credential is refused rather
+than accepted and cleaned up afterwards.
+
+## Why there is no CodeQL
+
+Code scanning is available and was considered. The reason it is not here is
+measurable rather than a matter of taste: `mili-core` contains no filesystem
+access, no process spawning, no network access and no `unsafe`, which are the
+four things CodeQL's highest-yield Rust queries look for. Grepping the crate for
+`std::fs`, `Command::new`, `std::net` and `unsafe` returns zero hits in every
+case.
+
+That leaves `mili-ffi` as the only place a static analyser has anything to read,
+and it is a thin boundary over byte buffers that returns an error code: 64 lines
+of `unsafe`, all of it pointer arithmetic into caller-owned buffers, covered by 32
+boundary tests including a header that is checked against the exported symbol
+list. The finding classes that would apply to unsafe Rust are largely
+unsupported by CodeQL today.
+
+The checks that do apply are already present. Hardcoded credentials are covered by
+secret scanning, which is enabled with push protection. Panics on malformed input,
+which is the failure this library most cares about, are covered by
+`clippy::arithmetic_side_effects` being denied, six fuzz targets with committed
+regressions, and 284 tests.
+
+So the honest summary is that CodeQL would be a fifth layer over code that has
+almost no surface for it. If the library later grows a filesystem, network or
+process dependency, that stops being true and this decision should be revisited.
+
 ## Releases
 
 There are none. `publish = false` on every crate and no tag exists, which means
