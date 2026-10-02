@@ -723,18 +723,27 @@ same toolchain version and the same linker.
 
 Release signing is not performed by CI.
 
-- The CI workflow has `permissions: contents: read` and references no secrets.
-  No job can push a tag, create a release or write to the repository.
+- The CI workflow has `permissions: contents: read`, so no job can push a tag,
+  create a release or write to the repository. It references no stored secret.
+  The one token it passes is `${{ secrets.GITHUB_TOKEN }}` to `rustsec/audit-check`,
+  which GitHub generates per run and which is not a stored credential; it is
+  named that way because that is the syntax, not because it is a secret.
 - Build provenance for a release is produced keyless with sigstore, which needs
   no stored key.
 - A release tag is signed manually with an Ed25519 key that is generated offline,
-  stored offline and never placed in a repository, a CI variable or an
-  encrypted file in the repository. The public half is recorded in
-  `SIGNING_KEYS.md` when one exists.
+  stored offline and never placed in a repository, a CI variable or an encrypted
+  file in the repository. The public half is recorded in `SIGNING_KEYS.md`, which
+  is the revocation mechanism as well as the record, since there is no key server
+  to revoke against. That file also states how a user checks a tag and what to do
+  if the key that signed it has since been withdrawn.
 - If a release key is ever suspected of exposure, the release history is
-  re-signed with a new key and the compromise is recorded in writing. There is
-  no revocation shortcut, because there is no online key infrastructure to
-  revoke against.
+  re-signed with a new key and the compromise is recorded in writing. There is no
+  revocation shortcut, because there is no online key infrastructure to revoke
+  against.
+
+There are no releases yet, so none of this has been exercised. The first tag is
+the first test of it, and `SIGNING_KEYS.md` says what has to be published before
+that tag exists.
 
 
 ## 18. The C ABI

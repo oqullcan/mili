@@ -140,6 +140,38 @@ Named rather than left for a reader to find.
   instead.
 - Two algorithms are internet-drafts, not RFCs, and may change. mili freezes
   what it implements under a format version byte.
+- There is no release yet. Nothing here is on crates.io and no tag exists, so
+  `mili-core` is `publish = false` and there is nothing to `cargo install`.
+  `SIGNING_KEYS.md` records the state of that.
+
+## Using it
+
+There is no release to install. Clone and build:
+
+```sh
+git clone https://github.com/oqullcan/mili.git
+cd mili
+cargo build --locked --release -p mili-core
+```
+
+Then add it as a path or git dependency, the ordinary way:
+
+```toml
+[dependencies]
+mili-core = { git = "https://github.com/oqullcan/mili.git" }
+```
+
+Or write the git URL with `#v1.0.0` once a tag exists. `mili-core` has no build
+script, no code generation and no `unsafe`, so a dependency on it brings no build
+time surprises beyond compiling the cryptography crates.
+
+The C ABI and the Go binding have their own build steps, below.
+
+The library is not published to a registry, which means there is no version you
+can depend on that someone else chose. Pin the git revision if you need a fixed
+one, and read `SPEC.md` before depending on a format: two of the primitives are
+internet-drafts rather than RFCs, and a format version byte is what freezes what
+mili implements.
 
 ## Checks
 
@@ -185,6 +217,24 @@ Two of those notes are partial and say so in their own text: `libc` and
 `curve25519-dalek`. `supply-chain/README.md` states for each which part was read,
 which was not, and why that boundary is a checkable claim about reachability
 rather than a matter of how long the file is.
+
+## Releases
+
+There are none. `publish = false` on every crate and no tag exists, which means
+the repository is the only distribution channel and there is no version anyone
+else chose.
+
+When a release is cut, two things have to be true and are checked by hand rather
+than by CI, because CI has `permissions: contents: read` and cannot write a tag:
+
+- The tag is an Ed25519-signed tag. `git tag -v <tag>` prints a fingerprint that
+  must appear in `SIGNING_KEYS.md`, which also records a withdrawal if a key is
+  ever suspected of exposure. That file is the revocation mechanism, because an
+  offline key has nowhere else to be revoked.
+- Build provenance is produced keyless with sigstore from the workflow run, which
+  needs no key and is why provenance and signing are separate mechanisms.
+
+`SPEC.md` section 17 is the policy and `SIGNING_KEYS.md` is the record.
 
 ## The C ABI and the Go binding
 
@@ -235,6 +285,17 @@ that call ML-KEM-768, X25519, ML-DSA-65 or Ed25519 are excluded under miri, as
 are the tests that call Argon2id, one exhaustive Wycheproof sweep is ignored
 there, and the sealed box byte sweep is reduced to one position per region because
 each authenticated operation costs about ten seconds when interpreted.
+
+The exclusions are not loose. Roughly 131 of the 193 library tests are gated, and
+an attempt to widen the gate was made and abandoned: the stream module looks like
+the obvious candidate because it is ChaCha20-Poly1305 and HKDF with no KEM, but
+its tests go through `seal_buffered`, which decapsulates, which is X-Wing, which
+is ML-KEM-768 and X25519. `SealingKey::from_bytes` alone is genuinely free, since
+it only wraps 32 bytes, but no test in the tree needs a key without also sealing or
+opening with it. So the number miri runs is smaller than the number of tests
+because the arithmetic is slow to interpret, not because the gating was
+over-applied, and the CI job is honest about what it covers rather than quietly
+green over a tenth of the suite.
 
 Excluding a test from miri is easy to forget and the symptom is a job that never
 finishes rather than a failure that names the test. `keyfile::derive_kek` panics
