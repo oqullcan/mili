@@ -81,7 +81,20 @@ to diagnose than one that failed immediately.
 ## Adding a dependency
 
 Every version is written as `=x.y.z`. Caret requirements are not used, so adding a
-dependency is always an explicit edit and a lockfile change. After adding one:
+dependency is always an explicit edit and a lockfile change.
+
+**There are two lockfiles.** The fuzz crate is excluded from the workspace and has
+its own `fuzz/Cargo.lock`, so a feature change in the root `Cargo.toml` leaves it
+stale and every fuzz job fails at its first step with "cannot update the lock file
+because `--locked` was passed". The same is true of any dependency change. After
+touching `Cargo.toml`, refresh both:
+
+```sh
+cargo metadata --format-version 1 > /dev/null
+cd fuzz && cargo metadata --format-version 1 > /dev/null
+```
+
+Then, for a new dependency:
 
 1. `cargo vet check` will report it as unaudited. Read its source and write a note
    in `supply-chain/audits.toml`, or add an exemption that says why nobody looked.
@@ -89,7 +102,9 @@ dependency is always an explicit edit and a lockfile change. After adding one:
    is fine.
 2. `cargo deny check` may fail on the licence or on a feature default.
 3. If it is a direct dependency of `mili-core`, `cargo deny` will want an entry
-   under `[bans.features]` explaining any feature you turned off.
+   under `[bans.features]` explaining any feature you turned off. That check is
+   `exact = true`, so a feature added anywhere fails the build until it is listed,
+   which is the intended behaviour rather than an annoyance to work around.
 
 ## Adding a format
 
