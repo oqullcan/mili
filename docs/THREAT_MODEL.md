@@ -154,6 +154,19 @@ that key is `HKDF(Argon2id(password))`, so it would have outlived the file it
 decrypted and the password rotation meant to bury it. Mitigated in part by
 `zeroize` semantics.
 
+That this was missed is the point worth recording, because it says the
+per-crate audit has to be systematic rather than a matter of care. `zeroize` is
+opt-in per dependency, so nothing in the build, the tests or the fuzzing notices
+a crate that holds a secret and does not clear it — the code is correct and the
+feature is simply absent. It is a common enough omission to have been found
+independently elsewhere on a crate mili also depends on: Ente's `ente-core`
+enables `zeroize` on its `x-wing` dependency by hand, with a comment saying to
+remove the override once https://github.com/rozbb/rust-hpke/issues/110 lands,
+because `hpke` turned on `x-wing` without it. That is the same defect in the same
+crate as the one mili had in `chacha20poly1305`, which is why mili's audit walks
+the feature list of every secret-holding crate in the tree rather than trusting
+that the obvious ones were done.
+
 Residual: the `Hkdf` object returned by `hkdf` 0.13 holds an internal copy of
 the pseudorandom key and does not implement `Zeroize`, so that copy is released
 to the allocator without being overwritten. The same applies to buffers the

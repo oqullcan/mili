@@ -408,6 +408,29 @@ the error path. Argon2 reports its own configuration error for too few blocks;
 mili rejects the file before reserving memory, so the caller sees
 `Error::Failed` like every other rejection.
 
+#### Why a floor is not enough
+
+The floors alone are the usual choice, and they are not a defence on their own.
+A parameter-downgrade attack does not have to go below the floor; it only has to
+go to it. A reader that checks `m_cost >= 32768` and nothing else will happily
+derive at 32 MiB when the file asks for it, and 32 MiB is a parameter the author
+published as the floor precisely because it is the weakest value mili ever
+writes. Both halves are needed, and both are needed because the parameters come
+from the file being opened rather than from the writer.
+
+Ente's account layer is a worked example of the floors-only version, which is why
+this is written down rather than left implicit. Its password-derived
+key-encryption key takes `mem_limit` and `ops_limit` from `SrpAttributes`, which
+the server serves in the clear, and the only validation is a lower bound —
+8 KiB of memory and one pass, the values that crate defines for inputs that are
+already high entropy and explicitly never for passwords. A compromised or
+malicious server therefore does not have to break Argon2; it sets the two
+parameters a client will use for every subsequent login and the offline attack
+against the stored encrypted key becomes trivial. Nothing about that is
+exploitable through mili, because the ceilings are in the format rather than in
+the configuration, but the shape of it is the argument for section 7.2 being
+what it is.
+
 ### 7.3 Loss of a key
 
 Losing a key file is not detectable by mili: every failure mode returns
