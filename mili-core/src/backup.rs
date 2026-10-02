@@ -287,6 +287,23 @@ impl Backup {
         if password.is_empty() {
             return Err(Error::Failed);
         }
+        // The order of these three lines before `wrap_key_for` is load bearing, and
+        // there is no test for it because there cannot be one.
+        //
+        // `wrap_key_for` runs Argon2id at up to `M_COST_CEILING`, which is a
+        // gigabyte of memory and a fifth of a second. `Header::parse` is a magic
+        // check, a version check and a few length comparisons; `check_params` is
+        // three range checks. Doing them first means a file that is not a mili
+        // backup at all, or that names an implausible profile, is refused for the
+        // cost of a few comparisons rather than the cost of a derivation. That
+        // matters for a format whose whole purpose is to be handed to a program
+        // that did not write it.
+        //
+        // A test would need to tell "the bounds refused it" apart from "the tag
+        // refused it", and both are `Error::Failed`. The bounds themselves are
+        // tested directly in `the_accepted_range_is_inclusive_at_both_ends`, which
+        // calls `check_params` rather than going through a file, and the cost of
+        // the happy path is what the timing here is about.
         let header = Header::parse(&self.0)?;
         check_params(header.m_cost, header.t_cost, header.p_cost)?;
 

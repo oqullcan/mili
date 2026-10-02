@@ -267,6 +267,14 @@ impl KeyFile {
         password: &[u8],
     ) -> Result<(u8, usize, SecretBytes<64>), Error> {
         check_password(password)?;
+        // Cheap before expensive, for the same reason and with the same caveat as
+        // `Backup::open`: `Header::parse` and `check_params` together are a magic
+        // check, a version check, some length comparisons and three range checks,
+        // and they run before `wrap_key_for` spends up to a gigabyte and a fifth
+        // of a second on a file that may not be a key file at all. The ordering is
+        // not testable, because the bounds refusing a profile and the tag refusing
+        // the same file are both `Error::Failed`; `check_params` is tested
+        // directly instead.
         let header = Header::parse(&self.0)?;
         check_params(header.m_cost, header.t_cost, header.p_cost)?;
 
