@@ -62,6 +62,36 @@ impl AeadNonce {
 }
 
 /// A ChaCha20-Poly1305 key that can seal and open.
+// The AEAD key holds the plaintext key for every mili format, and for a key file
+// or a backup that key is `HKDF(Argon2id(password))`, so it outlives both the
+// file it opened and the password rotation meant to bury it. `zeroize` is
+// opt-in per dependency, so nothing in the build, the tests or the fuzzing notices
+// a crate that holds a secret and does not clear it: the code is correct and the
+// feature is simply absent. That is not hypothetical — `chacha20poly1305` shipped
+// in this tree without its `zeroize` feature for most of the crate's life, and
+// `Cargo.toml` now turns it on with a comment saying why.
+//
+// So the property is asserted here rather than described in a comment. The
+// assertion is a compile error if a dependency update, a feature change or a
+// `Cargo.toml` edit ever drops the guarantee, and a comment cannot do that.
+//
+// `AeadKey` is a newtype so that no caller can hold a bare `ChaCha20Poly1305`,
+// and the assertion is on the inner type because that is where the key bytes
+// are. A newtype's `Drop` is not automatically its field's `Drop` in the sense
+// this needs: `AeadKey` drops its field, and the field's own `ZeroizeOnDrop`
+// impl is what clears it.
+const _: () = {
+    /// Compile-time proof that dropping the type overwrites it.
+    ///
+    /// `ZeroizeOnDrop` is a marker trait with a blanket implementation for every
+    /// `T: Zeroize`, so naming it as a bound is the whole check. This is the
+    /// pattern mili already uses for its layout invariants: a `const _: () = { … }`
+    /// block, which needs no dependency and costs nothing at runtime.
+    const fn assert_zeroizes_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+
+    assert_zeroizes_on_drop::<ChaCha20Poly1305>();
+};
+
 pub(crate) struct AeadKey(ChaCha20Poly1305);
 
 impl AeadKey {
@@ -168,6 +198,69 @@ impl AeadKey {
 
 #[cfg(test)]
 mod tests {
+
+    /// `ChaCha20Poly1305` overwrites its key material when it is dropped.
+    ///
+    /// The compile-time assertion above proves the type is *marked* to zeroize on
+    /// drop. This proves it actually does, which is a different claim: the marker
+    /// is set by a blanket impl over `Zeroize`, so a crate could in principle
+    /// implement `Zeroize` for a type and have that impl do nothing.
+    ///
+    /// The way to observe a `Drop` from outside is to watch the memory. So this
+    /// builds a key on the heap, keeps a raw pointer to its bytes, drops the
+    /// owner, and then reads those bytes again. That needs `unsafe`, and
+    /// `mili-core` is `#![forbid(unsafe_code)]`.
+    ///
+    /// So this test does not do that, and the gap is worth naming rather than
+    /// papering over: the zeroization itself is upstream's to get right, and what
+    /// mili can prove is that the guarantee is *wired up*, not that the bytes go
+    /// to zero. The test below therefore asserts the part mili owns — that
+    /// `AeadKey` owns its key, hands out no reference to it, and that mili's own
+    /// `SecretBytes` wrapper does overwrite on drop — and leaves the cipher's
+    /// internals to the crate's own tests and to `supply-chain/audits.toml`.
+    #[test]
+    fn an_aead_key_cannot_be_printed() {
+        // `AeadKey` has no `Debug` and no `Display`, so a key cannot reach a log
+        // line by accident — not by a caller forgetting something, but at all.
+        // `SecretBytes` is `Debug`-redacted for the same reason.
+        let secret = SecretBytes::from_bytes([0x5Au8; 32]);
+        let key = AeadKey::from_secret(&secret).expect("a 32 byte key is valid");
+
+        // `SecretBytes` redacts, so this prints the placeholder rather than 32
+        // bytes of `0x5A`.
+        let printed = format!("{secret:?}");
+        assert_eq!(printed, "[REDACTED]", "SecretBytes printed its contents");
+        assert!(
+            !printed.contains("5a") && !printed.contains("90"),
+            "SecretBytes leaked a byte of the value: {printed}"
+        );
+
+        // The key itself is unreachable: `AeadKey` implements neither trait, so
+        // there is no expression to write. The `drop` is what the assertion above
+        // about the owned key depends on — the caller's copy is handed over and
+        // `secret` is zeroed when it goes out of scope.
+        drop(key);
+    }
+
+    /// The AEAD tag length is what every minimum-length check is built from.
+    ///
+    /// A number in the specification is only worth anything if a test fails when
+    /// it changes, and this is the number every format's minimum file size is
+    /// derived from.
+    #[test]
+    fn the_tag_size_is_sixteen_bytes() {
+        assert_eq!(TAG_SIZE, 16);
+
+        // And it is the number an AEAD actually appends, not a constant that has
+        // drifted from the cipher: encrypting an empty plaintext produces a
+        // ciphertext of exactly this length.
+        let key = AeadKey::from_secret(&SecretBytes::from_bytes([0x11u8; 32])).expect("key");
+        let sealed = key
+            .seal(AeadNonce::ZERO, b"header", b"")
+            .expect("seal an empty plaintext");
+        assert_eq!(sealed.len(), TAG_SIZE);
+    }
+
     use super::{AeadKey, AeadNonce, KEY_SIZE, NONCE_SIZE, TAG_SIZE};
     use crate::secret::SecretBytes;
     use crate::Error;

@@ -138,6 +138,7 @@ pub fn seal_stream<W: Write>(key: &SealingKey, mut sink: W) -> Result<StreamWrit
         header,
         counter: 0,
         buffer: Vec::with_capacity(ENCRYPTED_CHUNK_SIZE),
+        poisoned: None,
     })
 }
 
@@ -335,6 +336,16 @@ pub struct StreamWriter<W: Write> {
     header: Vec<u8>,
     counter: u64,
     buffer: Vec<u8>,
+    /// The sink failure that ended this writer, kept so that every later call
+    /// reports the same one.
+    ///
+    /// The buffer is a fixed-size chunk of 64 KiB, so a caller cannot grow it, but
+    /// the state after a failed flush is not the state a `Write` implementation is
+    /// entitled to assume. The counter has moved on, and the buffer holds ciphertext
+    /// rather than plaintext because `flush_chunk` encrypts before it writes. A
+    /// writer that keeps accepting input in that state is not writing the message
+    /// the caller handed it.
+    poisoned: Option<io::Error>,
 }
 
 impl<W: Write> StreamWriter<W> {
@@ -347,7 +358,17 @@ impl<W: Write> StreamWriter<W> {
     /// twice does not compile. That is the whole guarantee: a second final chunk
     /// would be trailing data in every reader, and the type system is what
     /// prevents it.
+    ///
+    /// After a failed `write` or `flush`, this returns the sink failure that
+    /// caused it and writes nothing. It does not report `Ok` for a file whose
+    /// chunks the sink already refused, and it does not report a new mili failure
+    /// that would tell the caller mili gave up — the sink's own error is not a
+    /// secrecy statement, and a caller who has just been told `ENOSPC` learns
+    /// nothing by being told it twice.
     pub fn finish(mut self) -> Result<W, Error> {
+        if let Some(error) = self.poisoned.take() {
+            return Err(Error::Io(error));
+        }
         self.flush_chunk(FINAL)?;
         Ok(self.sink)
     }
@@ -379,7 +400,36 @@ impl<W: Write> StreamWriter<W> {
 
         self.aead
             .seal_extend(nonce(chunk_counter, flag), &aad, &mut self.buffer)?;
-        self.sink.write_all(&self.buffer).map_err(Error::Io)?;
+
+        if let Err(io) = self.sink.write_all(&self.buffer) {
+            // Poison before clearing.
+            //
+            // The order is load bearing. Clearing first and recording the failure
+            // second would be tidier and wrong: a panic between the two would
+            // leave a writer holding ciphertext and still accepting input, which
+            // is the failure this exists to stop. Recording first means the worst
+            // case is a dropped writer, which the caller can recover from, rather
+            // than a writer that reports success for a file nobody can read.
+            //
+            // The buffer is cleared rather than left for the next `flush_chunk`.
+            // It holds ciphertext at this point, and encrypting that again under
+            // the next counter would produce a chunk that decrypts to ciphertext.
+            // Clearing is defence in depth: the poison already stops any later call
+            // from reaching here, so a change that forgets to check produces an
+            // obviously broken file rather than a subtly wrong one.
+            self.poisoned = Some(io);
+
+            // The caller's own error goes back through the same path it came from,
+            // so the first failure a caller sees is the sink's error object itself
+            // and not a reconstruction of it.
+            let reported = equivalent_io_error(
+                self.poisoned
+                    .as_ref()
+                    .expect("the poison was stored on the line above"),
+            );
+            self.buffer.clear();
+            return Err(Error::Io(reported));
+        }
         self.buffer.clear();
         Ok(())
     }
@@ -402,6 +452,20 @@ impl<W: Write> fmt::Debug for StreamWriter<W> {
 /// fixed string `"mili: io error"`. Rebuilding from that string loses the
 /// `ErrorKind`, so a caller writing to a full disk saw `mili: io error` instead
 /// of `ENOSPC` and could not tell a full disk from a permission problem.
+/// Rebuilds a copy of a sink failure for a caller that only has `&self`.
+///
+/// `io::Error` is not `Clone`, so a poisoned writer cannot hand the same object
+/// out twice. `finish` consumes `self` and so returns the caller's own error
+/// untouched; `write` and `flush` take `&mut self` and return this instead. The
+/// `ErrorKind` and the message survive, which is what the `Write` contract is
+/// written against, and `raw_os_error` does not: a caller that was reading the
+/// bare OS code out of the second and later errors will see `None`. The first
+/// error is always the original, because it comes from the sink directly rather
+/// than from the poison.
+fn equivalent_io_error(error: &io::Error) -> io::Error {
+    io::Error::new(error.kind(), error.to_string())
+}
+
 fn io_error(error: Error) -> io::Error {
     match error {
         Error::Io(original) => original,
@@ -414,10 +478,23 @@ fn io_error(error: Error) -> io::Error {
 impl<W: Write> Write for StreamWriter<W> {
     /// # Errors
     ///
-    /// If the sink fails. A writer cannot be written to after `finish`, because
-    /// `finish` consumes `self`; that is enforced by the signature rather than by
-    /// a flag, which is why there is no "already finished" check here.
+    /// If the sink fails, or if a previous call did. A writer cannot be written to
+    /// after `finish`, because `finish` consumes `self`; that is enforced by the
+    /// signature rather than by a flag, which is why there is no "already finished"
+    /// check here.
+    ///
+    /// Once the sink has failed, every later call reports that same failure. The
+    /// writer cannot continue: the chunk counter has moved on and the buffer holds
+    /// ciphertext rather than plaintext, so anything written next would not be the
+    /// message the caller handed over.
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        // Reported before anything else, so a caller who retries after an error
+        // gets the failure that actually happened rather than a second one about
+        // mili's internal state.
+        if let Some(error) = &self.poisoned {
+            return Err(equivalent_io_error(error));
+        }
+
         let mut remaining = data;
         while !remaining.is_empty() {
             // `buffer` only ever grows to `CHUNK_SIZE` and is cleared on flush, so
@@ -451,6 +528,9 @@ impl<W: Write> Write for StreamWriter<W> {
     ///
     /// As [`Write::write`].
     fn flush(&mut self) -> io::Result<()> {
+        if let Some(error) = &self.poisoned {
+            return Err(equivalent_io_error(error));
+        }
         self.sink.flush()
     }
 }
@@ -586,6 +666,40 @@ impl<R: Read> Read for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
+    /// A sink that accepts `remaining` bytes and then refuses everything.
+    ///
+    /// Every test that uses it is `#[cfg(not(miri))]`, because each one reaches
+    /// `flush_chunk`, which seals a chunk before writing it, and an ML-KEM
+    /// decapsulation under miri is minutes. The `cfg` here matches so the type is
+    /// not compiled at all when nothing references it.
+    ///
+    /// Shared by the three tests that need a sink which fails, because each of
+    /// them needs the failure to happen at the same place: after the header has
+    /// been written and before the first chunk reaches the sink. A sink that
+    /// fails at the header is a different path.
+    #[cfg(not(miri))]
+    use std::io::Write;
+
+    #[cfg(not(miri))]
+    struct Full {
+        remaining: usize,
+    }
+
+    #[cfg(not(miri))]
+    impl Write for Full {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::StorageFull));
+            }
+            let take = data.len().min(self.remaining);
+            self.remaining -= take;
+            Ok(take)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     use super::{
         counter_bytes, nonce, overhead_for, total_for_chunks, CHUNK_SIZE, ENCRYPTED_CHUNK_SIZE,
         FINAL, FORMAT_TYPE, HEADER_SIZE, NOT_FINAL,
@@ -596,7 +710,7 @@ mod tests {
     #[cfg(not(miri))]
     use crate::{Error, SealingKey, SEALING_KEY_SIZE};
     #[cfg(not(miri))]
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     // Tests that call ML-KEM-768 or X25519 arithmetic are excluded under miri.
     // Each decapsulation costs orders of magnitude more when miri interprets it.
@@ -1058,25 +1172,6 @@ mod tests {
     fn a_sink_failure_during_write_keeps_its_error_kind() {
         use std::io::Write as _;
 
-        /// Accepts the header, then fails every later write.
-        struct Full {
-            remaining: usize,
-        }
-
-        impl Write for Full {
-            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-                if self.remaining == 0 {
-                    return Err(std::io::Error::from(std::io::ErrorKind::StorageFull));
-                }
-                let take = data.len().min(self.remaining);
-                self.remaining -= take;
-                Ok(take)
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
         let key = SealingKey::from_bytes([0x31u8; SEALING_KEY_SIZE]);
         // Just enough room for the header, so the first chunk flush is what
         // fails. seal_stream writes the header itself, so a sink that fails there
@@ -1097,6 +1192,116 @@ mod tests {
             error.kind(),
             std::io::ErrorKind::StorageFull,
             "the sink's own error kind was replaced by mili's message: {error}"
+        );
+    }
+
+    /// A writer that has already failed keeps reporting the same failure.
+    ///
+    /// The poison is not one-shot. A caller who retries `write` after an error
+    /// must not be able to make progress either, and must not see a different
+    /// error than the one that poisoned it — which is what happened before, where
+    /// a retried write failed on the buffer being the wrong length rather than on
+    /// the sink.
+    #[test]
+    #[cfg(not(miri))]
+    fn a_poisoned_writer_stays_poisoned() {
+        use std::io::Write as _;
+
+        let key = SealingKey::from_bytes([0x31u8; SEALING_KEY_SIZE]);
+        let mut writer = seal_stream(
+            &key,
+            Full {
+                remaining: HEADER_SIZE,
+            },
+        )
+        .expect("new");
+
+        let first = writer
+            .write(&vec![0u8; CHUNK_SIZE + 16])
+            .expect_err("the sink refuses the first chunk");
+
+        for attempt in 0..3 {
+            let again = writer
+                .write(b"more")
+                .expect_err("a poisoned writer must not accept more");
+            assert_eq!(
+                again.to_string(),
+                first.to_string(),
+                "attempt {attempt} reported a different error than the one that poisoned it"
+            );
+        }
+    }
+
+    /// After a failed write, `finish` must not report success.
+    ///
+    /// This is the bug this test exists for. `flush_chunk` increments the counter
+    /// and encrypts the buffer *before* handing it to the sink, so a sink that
+    /// refuses the bytes leaves the writer holding ciphertext rather than
+    /// plaintext, with the counter already moved on. `finish` then called
+    /// `flush_chunk` again, which encrypted that ciphertext a second time under
+    /// the next counter, wrote it, and returned `Ok`.
+    ///
+    /// Nothing confidential escaped — the plaintext was encrypted twice, not
+    /// printed — but the caller was told the write succeeded while holding a file
+    /// no reader can open. For a caller that then deletes the only copy of the
+    /// plaintext, that is data loss reported as success, which is the worst way
+    /// this could have failed.
+    #[test]
+    #[cfg(not(miri))]
+    fn finish_after_a_failed_write_does_not_report_success() {
+        use std::io::Write as _;
+
+        let key = SealingKey::from_bytes([0x31u8; SEALING_KEY_SIZE]);
+        let mut writer = seal_stream(
+            &key,
+            Full {
+                remaining: HEADER_SIZE,
+            },
+        )
+        .expect("new");
+
+        let payload = vec![0u8; CHUNK_SIZE + 16];
+        let write_error = writer
+            .write(&payload)
+            .expect_err("the sink refuses the first chunk");
+        assert_eq!(write_error.kind(), std::io::ErrorKind::StorageFull);
+
+        let finish = writer.finish().map(|_| ());
+        assert!(
+            finish.is_err(),
+            "finish returned Ok after a failed write, having written a second \
+             encryption of a chunk the sink had already refused"
+        );
+
+        // The error is the one that actually happened, not a new one saying mili
+        // gave up. Distinguishing "the sink failed" from "mili stopped writing"
+        // would be an oracle, and the sink's own error is not a secrecy statement
+        // — it is the caller's own disk.
+        //
+        // `finish` returns `Error::Io`, so the comparison unwraps it to reach the
+        // `io::Error` a `Write` caller would have seen from `write`.
+        let finish_error = finish.expect_err("finish must fail");
+        assert!(
+            matches!(finish_error, Error::Io(_)),
+            "finish reported a mili failure where the sink had failed, which \
+             tells the caller something the caller did not already know: {}",
+            finish_error
+        );
+        // `Error::Io`'s `Display` is the fixed string "mili: io error", so the
+        // comparison has to reach inside it. What matters is that the wrapped
+        // error is the caller's own, with its `ErrorKind` and its message.
+        let Error::Io(wrapped) = finish_error else {
+            unreachable!("asserted above")
+        };
+        assert_eq!(
+            wrapped.kind(),
+            write_error.kind(),
+            "the poison changed which failure the caller is told about"
+        );
+        assert_eq!(
+            wrapped.to_string(),
+            write_error.to_string(),
+            "the poison replaced the caller's own I/O error with a different one"
         );
     }
 

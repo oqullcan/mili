@@ -236,7 +236,6 @@ mod tests {
         assert_eq!(sealed[4], 0x01);
         assert_eq!(sealed[5], 0x01);
         assert_eq!(sealed.len(), 1 + SEALED_BOX_OVERHEAD);
-        assert_eq!(&sealed[HEADER_SIZE..], &sealed[HEADER_SIZE..]);
         assert_eq!(sealed[HEADER_SIZE..].len(), 1 + 16);
     }
 
