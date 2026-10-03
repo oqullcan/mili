@@ -34,7 +34,7 @@ The six fuzz targets each need a campaign worth the name run by a person; CI run
 one minute per target as a smoke test that the target still reaches its parser.
 See `fuzz/README.md`.
 
-## Four things that have broken CI here, so you do not have to rediscover them
+## Five things that have broken CI here, so you do not have to rediscover them
 
 Each of these failed a push, and each failed for a reason that is not in the error
 message.
@@ -64,9 +64,29 @@ fuzzes forever. `regressions/target/*.bin` executes each input and exits, which 
 what a regression check wants. There is one committed regression today,
 `open_backup/entries_len_overflow.bin`.
 
+**A test that uses a `#[cfg(not(miri))]` import breaks only the miri job.** The
+signing tests skip miri because an ML-DSA-65 plus Ed25519 signature takes minutes
+under interpretation, so `SigningKey` and `HEADER_SIZE` are imported under
+`#[cfg(not(miri))]` rather than unconditionally. A new test that reaches for one of
+them compiles and passes everywhere else, and fails in the miri job at compile time
+with `E0425: cannot find value ... in this scope`. Every other job is green and the
+failure names a symbol rather than a cause.
+
+Reproduce it locally in about a second instead of waiting for the push:
+
+```sh
+RUSTFLAGS="--cfg miri" cargo +nightly test --locked -p mili-core --lib --no-run
+```
+
+That builds the test binary with the same `cfg` the miri job sees. It does not
+interpret anything, so it is fast, and it catches the whole class. The fix is
+either `#[cfg(not(miri))]` on the test if it signs, or moving a constant out of
+the gated import if it does not — a length that cannot be asserted under miri is a
+length nothing checks there.
+
 ## Miri coverage is narrow on purpose
 
-Roughly 131 of the 193 library tests are `#[cfg(not(miri))]`, and that is not an
+Roughly 141 of the 216 library tests are `#[cfg(not(miri))]`, and that is not an
 oversight to be tidied. A test that decapsulates goes through X-Wing, which is
 ML-KEM-768 and X25519, and interpreting either of those is not something a six
 minute job should do. The stream module looks like the exception because it is

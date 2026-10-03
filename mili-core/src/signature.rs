@@ -455,13 +455,18 @@ impl<'a> SignatureFile<'a> {
 // constants, labels and transcript, which is the part worth proving.
 #[cfg(test)]
 mod tests {
-    use super::{
-        transcript, ED25519_SEED_SIZE, ED25519_SIGNATURE_SIZE, ED25519_VERIFYING_KEY_SIZE, LABEL,
-        ML_DSA65_SIGNATURE_SIZE, ML_DSA65_VERIFYING_KEY_SIZE, OID, SIGNATURE_PAYLOAD_SIZE,
-        SIGNATURE_SIZE, SIGNING_KEY_SIZE, VERIFYING_KEY_SIZE,
-    };
+    // The lengths are constants, so they are imported unconditionally: `HEADER_SIZE`
+    // and `ML_DSA65_SEED_SIZE` were previously only reachable from tests that sign,
+    // which miri skips, and a size that cannot be asserted under miri is a size
+    // nothing checks there.
     #[cfg(not(miri))]
-    use super::{SigningKey, HEADER_SIZE, ML_DSA65_SEED_SIZE};
+    use super::SigningKey;
+    use super::{
+        transcript, ED25519_SEED_SIZE, ED25519_SIGNATURE_SIZE, ED25519_VERIFYING_KEY_SIZE,
+        HEADER_SIZE, LABEL, ML_DSA65_SEED_SIZE, ML_DSA65_SIGNATURE_SIZE,
+        ML_DSA65_VERIFYING_KEY_SIZE, OID, SIGNATURE_PAYLOAD_SIZE, SIGNATURE_SIZE, SIGNING_KEY_SIZE,
+        VERIFYING_KEY_SIZE,
+    };
     #[cfg(not(miri))]
     use crate::{Error, SealingKey};
     #[cfg(not(miri))]
@@ -530,6 +535,7 @@ mod tests {
         // values, which is the other half: an upstream release that changes a size
         // fails here instead of silently becoming mili's format version, because a
         // mili file written by one build has to be readable by the other.
+        assert_eq!(HEADER_SIZE, 6);
         assert_eq!(SIGNING_KEY_SIZE, 64);
         assert_eq!(VERIFYING_KEY_SIZE, 1984);
         assert_eq!(SIGNATURE_PAYLOAD_SIZE, 3373);
@@ -550,7 +556,11 @@ mod tests {
         );
     }
 
+    // Signing is what this test exists to do, and an ML-DSA-65 plus Ed25519
+    // signature under miri is minutes rather than milliseconds. Everything it
+    // checks is constant arithmetic that runs under miri in the test above.
     #[test]
+    #[cfg(not(miri))]
     fn seed_lengths_are_the_ones_the_upstream_types_produce() {
         // ML_DSA65_SEED_SIZE is the one length left as a literal, because ml-dsa
         // publishes the expanded signing key's length and not the seed's. So
