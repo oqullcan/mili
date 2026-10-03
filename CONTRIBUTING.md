@@ -23,11 +23,23 @@ cargo vet check --locked
 
 cargo +nightly miri test --locked -p mili-core
 
+CARGO_TARGET_DIR=/tmp/a cargo build --locked --release -p mili-core -p mili-ffi
+CARGO_TARGET_DIR=/tmp/b cargo build --locked --release -p mili-core -p mili-ffi
+sha256sum /tmp/{a,b}/release/libmili_ffi.so  # the two hashes must be equal
+
 cd fuzz && cargo +nightly fuzz run --target x86_64-unknown-linux-gnu open_backup regressions/open_backup/*.bin
 ```
 
 `cargo test` takes about four minutes, dominated by Argon2id in the key file tests
 and one ML-KEM operation per property case. The miri job takes about eleven.
+
+The last group is the `reproducible` job: two release builds into separate target
+directories, compared byte for byte. Two directories rather than a rebuild in one,
+because a second build into the same directory is answered from the cache and
+compares nothing. It is same-machine and same-toolchain twice, which catches a build
+embedding a timestamp, a path or a map iteration order, and it is not a claim of
+bit-reproducibility across toolchains — `docs/SPEC.md` section 16 says what is and
+is not claimed there.
 
 A full `cargo test --workspace` run is the gate for anything touching a format.
 The six fuzz targets each need a campaign worth the name run by a person; CI runs

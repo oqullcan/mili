@@ -13,6 +13,18 @@ this section records work that is committed but not released.
 
 ### Added
 
+- `docs/AUDIT_SCOPE.md` records what an audit of mili would cover: the modules and
+  their visibility, the entry points, the claims that need evidence rather than
+  agreement, and what mili does not claim. It opens by saying no third party has
+  audited mili. `mili-core/tests/audit_scope.rs` keeps that true and keeps the
+  module table honest, so adding a module is a decision about the surface that
+  cannot be made silently.
+- A CI job builds the release artifacts twice into separate target directories and
+  compares them byte for byte. `docs/SPEC.md` section 16 listed the conditions that
+  are supposed to make a build reproducible and every one of them was an argument;
+  this observes it. It is same-machine and same-toolchain twice, which catches a
+  build embedding a timestamp, a path or a map iteration order, and it is not a
+  claim of bit-reproducibility across toolchains.
 - `Backup::info` reports what a backup container claims, without a password and
   without running a derivation: the Argon2 profile and the entry count. The README
   has listed "inspect" among a backup container's operations for several releases
@@ -86,6 +98,24 @@ this section records work that is committed but not released.
   the two quantities cannot be confused again.
 
 ### Changed
+
+- Signing is randomised on the ML-DSA half, using `sign_randomized` and 32 bytes
+  from mili's existing randomness source through a `TryRng` adapter rather than
+  `OsRng`, so the library keeps its single source. This removes the
+  deterministic-signer fault-attack surface and stops the ML-DSA half being a
+  function of the key and the message alone. `THREAT_MODEL.md` section 3.6 had
+  recorded randomised signing as unavailable because it needs `ml-dsa`'s `hazmat`
+  feature; it does not, there is a `rand_core` feature, and the restriction was
+  never real. An entropy failure now returns `Error::Failed` instead of being
+  reachable as a panic. The encoding is unchanged: still `mili-sig-v1`, still the
+  same length, still verified the same way.
+- The composite signature is still linkable, and the documentation no longer
+  implies otherwise. `mili-sig-v1` carries the Ed25519 half verbatim and Ed25519
+  is deterministic, so those 64 bytes repeat between two signatures over the same
+  message. Removing that means changing the composite construction, which forfeits
+  the property that makes it worth carrying. The residual is now asserted by a
+  test, so a future format change which did remove it has to update the threat
+  model rather than quietly invalidate it.
 
 - Every crate on a production edge in `Cargo.lock` has an audit written from its
   source in `supply-chain/audits.toml`: 48 crates across 47 names. The remaining

@@ -1,7 +1,7 @@
 # mili documentation
 
-Five documents, each answering a different question. Read the one that matches
-why you are here rather than all five.
+Six documents, each answering a different question. Read the one that matches
+why you are here rather than all six.
 
 ## If you want to use mili
 
@@ -25,6 +25,12 @@ compromised hosts and traffic analysis.
 than after an incident. Section 3 records that no third party has audited mili and
 what exists in place of that, which is the single fact to weigh above everything
 else here.
+
+**`AUDIT_SCOPE.md`** — what an audit would cover if one were commissioned: the module
+table, the entry points, and the list of claims that need evidence rather than
+agreement. It opens by saying no third party has audited mili, and a test keeps it
+saying that. Read it to judge whether the scope is the right one, not to conclude
+that it has been covered.
 
 ## If you are considering a command line front end
 
@@ -61,6 +67,10 @@ did not establish.
 
 There is no `CODE_OF_CONDUCT.md`, because there is no community to have one yet.
 It would be added before it were needed rather than after.
+
+There is no `AUDIT.md` recording an audit that happened, because none has. The
+closest document is `AUDIT_SCOPE.md`, which is what an audit would cover rather
+than a result, and it is named for that difference.
 
 `../CHANGELOG.md` records what changed in each release, in the format Keep a
 Changelog prescribes. There are no releases yet, so its entries are the ones

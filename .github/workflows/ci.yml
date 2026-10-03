@@ -111,6 +111,82 @@ jobs:
       - name: Supply chain audits
         run: cargo vet check --locked
 
+  reproducible:
+    name: reproducible build
+    runs-on: ubuntu-latest
+    # Two release builds of one commit into separate target directories, compared
+    # byte for byte. `SPEC.md` section 16 lists the conditions that are supposed to
+    # make a build reproducible. Until now all of them were arguments: the pin, the
+    # lockfile, the `=x.y.z` requirements, the claim that no build script reads the
+    # clock. This job is the only place any of it is observed.
+    #
+    # It is narrower than the word suggests, and the distinction matters. Same
+    # machine, same toolchain, same source path, twice. That catches a build
+    # embedding a timestamp, a hostname, an absolute path, a hash-map iteration
+    # order or any other per-run state, which is the realistic failure mode and
+    # the one a compromised or merely careless build script would introduce. It
+    # does not catch a difference that only appears on a different machine, a
+    # different linker or a different rustc, and `SPEC.md` section 16 does not
+    # claim bit-reproducibility across toolchains.
+    #
+    # Two target directories rather than a rebuild in one, because a second build
+    # into the same directory is answered from the cache and compares nothing.
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.0
+
+      # Repeated from the `check` job on purpose. Everywhere else the pin is a
+      # consistency measure; here it is the variable under test, so a drifted
+      # toolchain would make the comparison meaningless rather than merely
+      # inconsistent.
+      - name: Fail if the toolchain drifted from the pin
+        run: |
+          expected=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          actual=$(rustc --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ "$expected" != "$actual" ]; then
+            echo "rust-toolchain.toml pins $expected but this job built $actual" >&2
+            exit 1
+          fi
+
+      - name: Build into the first target directory
+        run: cargo build --locked --release -p mili-core -p mili-ffi
+        env:
+          CARGO_TARGET_DIR: /tmp/mili-repro-a
+
+      - name: Build into the second target directory
+        run: cargo build --locked --release -p mili-core -p mili-ffi
+        env:
+          CARGO_TARGET_DIR: /tmp/mili-repro-b
+
+      # Only the build outputs, not the whole target directory. A target directory
+      # contains `.d` files and fingerprints that record absolute paths, so
+      # comparing all of it would fail on the very thing this job varies and say
+      # nothing about the artifacts. The file lists are compared as well as the
+      # hashes: a build that dropped an artifact would otherwise pass by never
+      # mentioning it.
+      - name: Fail if the two builds differ
+        run: |
+          list() {
+            find "$1/release" -maxdepth 1 -type f \
+              \( -name '*.so' -o -name '*.rlib' -o -name '*.a' \) -print0 \
+              | sort -z | xargs -0 sha256sum | sed "s|$1/||"
+          }
+          first=$(list /tmp/mili-repro-a)
+          second=$(list /tmp/mili-repro-b)
+          if [ "$first" != "$second" ]; then
+            echo "two builds of the same commit produced different artifacts:" >&2
+            diff <(echo "$first") <(echo "$second") >&2 || true
+            exit 1
+          fi
+          echo "$first"
+          echo "both builds agree"
+
   miri:
     name: miri
     runs-on: ubuntu-latest

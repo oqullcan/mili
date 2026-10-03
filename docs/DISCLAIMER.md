@@ -20,7 +20,9 @@ constructions or new analyses.
 The primitives mili composes come from outside this repository.
 
 **No third party has audited mili, and this repository is not an audit of the
-crates below.** What mili has done is read each crate's source itself and record
+crates below.** What an audit of mili itself would cover is written down in
+`AUDIT_SCOPE.md`, which is a scope and not a result. What mili has done for the
+crates is read each crate's source itself and record
 what was read, in `../supply-chain/audits.toml`. Every crate on a production edge has
 one of those notes. That is not the same as an independent audit and it should not
 be quoted as one: nobody outside this repository looked, and the two largest notes

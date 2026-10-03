@@ -823,10 +823,31 @@ A build is reproducible from the repository alone when the following hold:
   `cargo vet check` passing does and does not mean is recorded in
   `../supply-chain/README.md`.
 
+The CI job `reproducible` observes the first list rather than arguing it: it builds
+twice into two separate target directories and compares the artifacts byte for
+byte. Two directories, because a second build into one directory is answered from
+the cache and compares nothing. It repeats the toolchain-drift check on purpose,
+because there the pin is the variable under test rather than a consistency measure.
+
+What that job establishes is narrower than the word suggests. Same machine, same
+toolchain, same source path, twice. It catches a build that embeds a timestamp, a
+hostname, an absolute path, a hash-map iteration order or any other per-run state,
+which is the realistic failure mode. It does not catch a difference that appears
+only on another machine, another linker or another rustc.
+
 mili does not claim bit-reproducible output across toolchain versions. A
 different rustc version, a different `target-cpu` or a different linker will
 produce a different binary. Reproducing an exact released binary requires the
 same toolchain version and the same linker.
+
+There is no SBOM in a third-party format. `../Cargo.lock` already carries a name, a
+version and a checksum for every package in the tree, `../supply-chain/audits.toml`
+carries the per-crate review that is not derivable from a checksum, and CI checks
+the lockfile is complete and current. Emitting CycloneDX or SPDX would need either
+a generator added to the trust boundary or a converter written here, and a
+hand-written converter emitting a document no schema validator has checked is a
+worse thing to hand an auditor than an honest description of what is already
+committed. `../docs/AUDIT_SCOPE.md` says where to look instead.
 
 ## 17. Release signing
 

@@ -24,6 +24,8 @@ The short version:
 - `docs/SPEC.md` — the wire formats, key hierarchy and key schedules
 - `docs/THREAT_MODEL.md` — what is mitigated, what is partial, what is out of scope
 - `docs/DISCLAIMER.md` — what mili does not do, and the words mili does not use
+- `docs/AUDIT_SCOPE.md` — what an audit would cover: the modules, the entry points,
+  and the claims that need evidence rather than agreement
 - `docs/CLI.md` — why there is no CLI, and what one would have to get right
 - `SECURITY.md` — what to report, and what is already a documented position
 - `CONTRIBUTING.md` — the checks, and the five failures that have broken CI
@@ -87,9 +89,10 @@ tests/vectors/       known answer and NIST ACVP test vectors, read at compile ti
 .github/workflows/   CI, third-party actions pinned by commit SHA
 ```
 
-`docs/README.md` is an index rather than a document: it says which of the five
+`docs/README.md` is an index rather than a document: it says which of the six
 belongs to a reader who wants to use mili, one who is assessing it, one who is
-considering a CLI, one who is contributing, and one who is verifying a release.
+commissioning an audit, one who is considering a CLI, one who is contributing,
+and one who is verifying a release.
 `README.md` and `SECURITY.md` stay at the root because that is where GitHub looks
 for them.
 
