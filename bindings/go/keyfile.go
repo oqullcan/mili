@@ -7,7 +7,7 @@ import "C"
 
 import "fmt"
 
-// The payload types a key file reports, as SPEC.md section 7 writes them.
+// The payload types a key file reports, as docs/SPEC.md section 7 writes them.
 const (
 	// PayloadSealing is a key file holding a [SealingKey].
 	PayloadSealing = 1
@@ -21,7 +21,7 @@ const (
 // 16 byte tag.
 const keyFileOverhead = 41 + 16
 
-// A KeyFile wraps one key under one password, as SPEC.md section 7 defines.
+// A KeyFile wraps one key under one password, as docs/SPEC.md section 7 defines.
 //
 // A key file is a byte string. It authenticates itself, so a caller can keep it in a
 // file, in a database row or in a version control system without mili caring, and it
@@ -143,7 +143,7 @@ func (f KeyFile) UnwrapSigning(password []byte) (SigningKey, error) {
 	return SigningKey(result), nil
 }
 
-// Rotate rewrites this key file under the same password with a fresh salt, as SPEC.md
+// Rotate rewrites this key file under the same password with a fresh salt, as docs/SPEC.md
 // section 12.1 defines rotation.
 //
 // It returns a new file and leaves the receiver alone, so a rotation whose copy never

@@ -7,7 +7,7 @@
 //! throughput concern rather than a correctness one.
 //!
 //! The property asserted beyond panic freedom is that the identifiers a container
-//! reports are distinct. `SPEC.md` section 8 refuses a container that holds two
+//! reports are distinct. `docs/SPEC.md` section 8 refuses a container that holds two
 //! entries with the same identifier, and a container that decoded into a list
 //! with a repeat would break the only mechanism a caller has for telling its
 //! backups apart.

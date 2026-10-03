@@ -257,7 +257,7 @@ func TestStreamsRoundTrips(t *testing.T) {
 	}
 }
 
-// TestThePlaintextBoundIsEnforced is the check behind THREAT_MODEL.md section 5.7: a
+// TestThePlaintextBoundIsEnforced is the check behind docs/THREAT_MODEL.md section 5.7: a
 // stream is not bounded by the format, so the caller's bound is the only defence.
 func TestThePlaintextBoundIsEnforced(t *testing.T) {
 	seed := mustSealingKey(t)
@@ -298,7 +298,7 @@ func TestSignAndVerify(t *testing.T) {
 	}
 }
 
-// TestSignIsDeterministic is what THREAT_MODEL.md section 3.6 records: ml-dsa 0.1.1
+// TestSignIsDeterministic is what docs/THREAT_MODEL.md section 3.6 records: ml-dsa 0.1.1
 // signs deterministically, so there is no second nonce to leak.
 func TestSignIsDeterministic(t *testing.T) {
 	seed := mustSigningKey(t)

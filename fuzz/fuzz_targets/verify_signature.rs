@@ -6,7 +6,7 @@
 //! verifying key that does not decode is skipped, because the interesting inputs
 //! are the ones that reach the two component verifications.
 //!
-//! The property is the composite rule itself: `SPEC.md` section 6 says a
+//! The property is the composite rule itself: `docs/SPEC.md` section 6 says a
 //! composite signature is valid only if both component signatures verify against
 //! the same message and context. Verifying twice must reach the same verdict, and
 //! a signature must never be accepted for a message it was not made for.

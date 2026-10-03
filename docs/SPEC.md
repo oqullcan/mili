@@ -386,7 +386,6 @@ Applied before Argon2 runs:
   so a hostile file cannot force unbounded memory use.
 - `t_cost <= 8`.
 - `p_cost <= 16`.
-- `m_cost >= 4 * p_cost`.
 
 Both floors and all three ceilings are properties of mili, not of Argon2. They
 are checked before the derivation, so a file naming 256 GiB or two billion passes
@@ -398,15 +397,26 @@ and the value comes from the file being opened. Without it, a file naming
 against whoever opens it, and `m_cost`'s ceiling would not catch it: the memory
 allocation is bounded while the number of passes over it is not.
 
-The `p_cost` ceiling exists because `m_cost >= 4 * p_cost` makes the lane count
-bounded by the memory ceiling anyway, and Argon2 requires at least four blocks
-per lane. Writing the bound down rather than relying on that derivation keeps the
-rejection explicit and cheap.
+The `p_cost` ceiling exists because `p_cost` is a caller-visible multiplier on
+the number of Argon2 lanes, and the number of lanes changes how much work the
+derivation does at the same `m_cost`. Writing the bound down rather than relying
+on a derivation from the memory ceiling keeps the rejection explicit and cheap,
+and keeps it a number in the format instead of a consequence of another one.
 
-The `m_cost >= 4 * p_cost` check keeps a combination Argon2 would refuse out of
-the error path. Argon2 reports its own configuration error for too few blocks;
-mili rejects the file before reserving memory, so the caller sees
-`Error::Failed` like every other rejection.
+#### The fourth check, which is not a bound
+
+`check_params` also compares `m_cost` against `4 * p_cost`, because Argon2 needs
+at least that many blocks for its block layout. It is not one of the rules above,
+and it is not reachable. Once the ranges have been applied `p_cost` is at most 16
+and `m_cost` at least 32768, so `4 * p_cost` is at most 64 and the requirement is
+already met by a factor of five hundred.
+
+It is listed here rather than in the list above so that a reader implementing
+this format does not conclude that a file has to be rejected for `4 * p_cost`.
+`mili-core` keeps the comparison as a guard against a future that raises
+`P_COST_CEILING` far enough for it to matter, and a test asserts the inequality
+above, so raising the lane ceiling far enough to make the comparison live fails
+that test rather than leaving the code and this document quietly disagreeing.
 
 #### Why a floor is not enough
 

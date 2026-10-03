@@ -62,7 +62,7 @@ func TestBackupRoundTripsEveryKindOfKey(t *testing.T) {
 	}
 }
 
-// TestEveryEntryHasADistinctIdentifier is what SPEC.md section 8 promises and what a
+// TestEveryEntryHasADistinctIdentifier is what docs/SPEC.md section 8 promises and what a
 // caller uses to tell its backups apart.
 func TestEveryEntryHasADistinctIdentifier(t *testing.T) {
 	backup := mustBackup(t,
@@ -206,7 +206,7 @@ func TestKindStringNamesEveryKind(t *testing.T) {
 }
 
 // Info reports what a backup claims without running a 64 MiB derivation, and KeyID
-// computes the other half of the identifier workflow SPEC.md section 11 describes.
+// computes the other half of the identifier workflow docs/SPEC.md section 11 describes.
 // Only the readable half existed before: a caller could read the identifiers out of
 // a backup but not compute the expected one for a key it held.
 func TestBackupInfoAndKeyID(t *testing.T) {

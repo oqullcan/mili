@@ -13,7 +13,7 @@ import (
 // A BackupEntry is one key recovered from a [Backup], with the identifier that names
 // it.
 type BackupEntry struct {
-	// KeyID is the 16 byte identifier, as SPEC.md section 11 computes it. It is
+	// KeyID is the 16 byte identifier, as docs/SPEC.md section 11 computes it. It is
 	// public, and it is there so a caller can tell whether the backup it opened is
 	// the one it meant without opening anything twice.
 	KeyID []byte
@@ -85,7 +85,7 @@ func (e BackupEntry) Kind() Kind {
 	}
 }
 
-// A Backup holds several keys under one password, as SPEC.md section 8 defines.
+// A Backup holds several keys under one password, as docs/SPEC.md section 8 defines.
 //
 // A backup is the answer to a question mili cannot answer for itself: losing a key.
 // Every failure in this library returns the same error, so mili cannot notice that a
@@ -290,7 +290,7 @@ func (b Backup) Info() (BackupInfo, error) {
 // given kind.
 //
 // [BackupEntry.KeyID] and this are the two halves of the workflow
-// SPEC.md section 11 describes for checking that a backup holds the keys it is
+// docs/SPEC.md section 11 describes for checking that a backup holds the keys it is
 // meant to. Only the first half existed before: a caller could read the
 // identifiers out of a backup but had no way to compute the expected one for a key
 // it held, so the two could not be compared.
@@ -321,11 +321,11 @@ func KeyID(key BackupKey) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(&out[0]), C.int(len(out))), nil
 }
 
-// ID returns the identifier of a sealing key, as SPEC.md section 11 defines it.
+// ID returns the identifier of a sealing key, as docs/SPEC.md section 11 defines it.
 func (k SealingKey) ID() ([]byte, error) { return KeyID(BackupKey{Sealing: k}) }
 
-// ID returns the identifier of a signing key, as SPEC.md section 11 defines it.
+// ID returns the identifier of a signing key, as docs/SPEC.md section 11 defines it.
 func (k SigningKey) ID() ([]byte, error) { return KeyID(BackupKey{Signing: k}) }
 
-// ID returns the identifier of a symmetric key, as SPEC.md section 11 defines it.
+// ID returns the identifier of a symmetric key, as docs/SPEC.md section 11 defines it.
 func (k SymmetricKey) ID() ([]byte, error) { return KeyID(BackupKey{Symmetric: k}) }

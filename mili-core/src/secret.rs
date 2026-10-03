@@ -84,9 +84,9 @@ impl<const N: usize> Eq for SecretBytes<N> {}
 
 /// A 256-bit symmetric key.
 ///
-/// This is the only key type that is not tied to a public-key algorithm. Keys
-/// for X-Wing sealing and for composite signing are separate types added in
-/// later phases, and neither converts into this one.
+/// This is the only key type that is not tied to a public-key algorithm. The
+/// sealing key and the composite signing key are separate types, and neither
+/// converts into this one.
 ///
 /// The value is zeroized on drop, `Debug` is redacted, `Display` is not
 /// implemented and equality is constant time. There is no `Clone` and no

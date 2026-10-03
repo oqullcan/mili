@@ -75,7 +75,7 @@ func GenerateSealingKey() (SealingKey, error) {
 // that would use crypto/rand directly, and it would not be a mili key.
 //
 // mili signs deterministically, so a signature does not carry a second nonce. See
-// THREAT_MODEL.md section 3.6 for what that does and does not mean.
+// docs/THREAT_MODEL.md section 3.6 for what that does and does not mean.
 func GenerateSigningKey() (SigningKey, error) {
 	out := make([]byte, SigningKeySize)
 	var written C.size_t
@@ -89,13 +89,13 @@ func GenerateSigningKey() (SigningKey, error) {
 
 // GenerateSymmetricKey draws a new symmetric key from the operating system CSPRNG.
 //
-// mili has no public operation that consumes a symmetric key: no format in SPEC.md
+// mili has no public operation that consumes a symmetric key: no format in docs/SPEC.md
 // takes one, because every format derives its own key from a seed or from a password.
 // A key from here is for a caller's own use, and the honest statement is that this
 // library does not hand you anything to use it with. A [Backup] will store and return
 // one, which makes it recoverable and still not usable.
 //
-// SPEC.md section 12.0 records that as a decision rather than an oversight, along
+// docs/SPEC.md section 12.0 records that as a decision rather than an oversight, along
 // with the two alternatives that were rejected.
 func GenerateSymmetricKey() (SymmetricKey, error) {
 	out := make([]byte, SymmetricKeySize)
@@ -131,7 +131,7 @@ func EncapsulationKey(seed SealingKey) ([]byte, error) {
 // VerifyingKey derives the public key for a signing key.
 //
 // mili does not authenticate a public key. A substituted verifying key means a
-// substituted signature, and this library will verify it. See THREAT_MODEL.md
+// substituted signature, and this library will verify it. See docs/THREAT_MODEL.md
 // section 5.8.
 func VerifyingKey(seed SigningKey) ([]byte, error) {
 	if len(seed) != SigningKeySize {

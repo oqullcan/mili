@@ -6,7 +6,7 @@
 // A thin layer over the C ABI in mili-ffi. Every operation here is one call across
 // that boundary, and none of them adds a policy of its own: there is no algorithm
 // selection, no retry, no padding, no key derivation of a different kind, and no
-// option that a version of SPEC.md does not define. One suite per format version.
+// option that a version of docs/SPEC.md does not define. One suite per format version.
 //
 // # Errors
 //
@@ -42,7 +42,7 @@
 // It does not clear the caller's memory, it does not authenticate a public key, and
 // it does not hide file sizes or traffic patterns. See DISCLAIMER.md in the mili
 // repository, which is the document that says what mili does not claim, and
-// THREAT_MODEL.md, which says what is out of scope.
+// docs/THREAT_MODEL.md, which says what is out of scope.
 package mili
 
 /*

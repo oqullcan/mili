@@ -2,7 +2,7 @@
 
 //! Fuzzes the password wrapped key file.
 //!
-//! This target reaches Argon2id, which at the profile `SPEC.md` section 7.1
+//! This target reaches Argon2id, which at the profile `docs/SPEC.md` section 7.1
 //! records touches 64 MiB three times and takes about 120 ms. That bounds
 //! throughput to roughly eight executions a second for any input whose header
 //! parses, which is most of them once the fuzzer learns the six byte prefix.
@@ -12,7 +12,7 @@
 //! at full speed from outside the crate, and inventing a public entry point for
 //! the fuzzer's benefit would be the wrong trade. What the target does buy is
 //! coverage of the whole file including the cost parameters, which is where the
-//! bounds in `SPEC.md` section 7.2 are decided, and an end-to-end check that the
+//! bounds in `docs/SPEC.md` section 7.2 are decided, and an end-to-end check that the
 //! typed openers cannot be made to disagree with the payload type.
 //!
 //! Two properties are asserted rather than only the absence of a panic:

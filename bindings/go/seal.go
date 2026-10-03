@@ -11,7 +11,7 @@ import "fmt"
 //
 // A sealed box is anonymous: it names no recipient and carries no key identifier,
 // so it is the same length for every recipient and for every message of a given
-// length. Nothing here pads and nothing hides the length. See THREAT_MODEL.md
+// length. Nothing here pads and nothing hides the length. See docs/THREAT_MODEL.md
 // sections 5.3 and 5.4.
 func Seal(recipient, plaintext []byte) ([]byte, error) {
 	if len(recipient) != EncapsulationKeySize {
@@ -100,7 +100,7 @@ func SealStream(seed SealingKey, plaintext []byte) ([]byte, error) {
 // does not trust. It is the only defence a hostile stream has: a stream's length is
 // not authenticated until its chunks are read, so a caller that passes a bound it
 // believes in is what stops a large file becoming a large allocation. mili does not
-// rate limit opens and does not bound a stream itself; see THREAT_MODEL.md
+// rate limit opens and does not bound a stream itself; see docs/THREAT_MODEL.md
 // section 5.7.
 func OpenStream(stream []byte, maximumPlaintext int, keys ...SealingKey) ([]byte, error) {
 	if len(keys) == 0 {
@@ -142,7 +142,7 @@ func OpenStream(stream []byte, maximumPlaintext int, keys ...SealingKey) ([]byte
 
 // Sign signs a message with a composite signing key seed.
 //
-// The signature is valid only if both component signatures verify, as SPEC.md section
+// The signature is valid only if both component signatures verify, as docs/SPEC.md section
 // 6 requires: one component alone is not a mili signature and this library will not
 // accept one.
 //

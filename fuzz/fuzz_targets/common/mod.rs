@@ -6,7 +6,7 @@
 //! 1. The claim under test is panic freedom. `mili-core` is
 //!    `#![forbid(unsafe_code)]` and every parse is length checked and fallible, so
 //!    any panic reachable from these targets is a defect.
-//!    `THREAT_MODEL.md` section 2.10 claims the fuzz targets check this, and they
+//!    `docs/THREAT_MODEL.md` section 2.10 claims the fuzz targets check this, and they
 //!    are the only evidence for it.
 //!
 //! 2. A rejection is a success. Every target feeds attacker-shaped bytes in and

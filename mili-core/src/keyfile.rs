@@ -651,9 +651,17 @@ pub(crate) fn check_params(m_cost: u32, t_cost: u32, p_cost: u32) -> Result<(), 
         return Err(Error::Failed);
     }
     // Argon2 requires at least `4 * p_cost` blocks for its block layout, and it
-    // reports a `BannedTooMuchMemory` style configuration error rather than
-    // producing output if the memory is too small. Rejecting here keeps that out
-    // of the caller's error path.
+    // reports a configuration error rather than producing output if the memory is
+    // too small. Checking it here would keep that out of the caller's error path.
+    //
+    // It cannot fire. The three checks above have already put `p_cost` at most 16
+    // and `m_cost` at least 32768, so `4 * p_cost` is at most 64 and the
+    // requirement is met with three orders of magnitude to spare. This is a guard
+    // against a future that raises `P_COST_CEILING` far enough for it to matter,
+    // not a bound the format relies on, and
+    // `the_four_blocks_per_lane_rule_cannot_fire_inside_the_accepted_box` is what
+    // keeps that statement honest — it fails if a constant moves enough to make
+    // this reachable.
     if (m_cost as u64) < 4 * (p_cost as u64) {
         return Err(Error::Failed);
     }
@@ -1517,6 +1525,58 @@ mod tests {
         assert!(check_params(M_COST, T_COST_CEILING + 1, P_COST).is_err());
         assert!(check_params(M_COST, T_COST, P_COST_FLOOR - 1).is_err());
         assert!(check_params(M_COST, T_COST, P_COST_CEILING + 1).is_err());
+    }
+
+    /// The four-blocks-per-lane rule cannot fire inside the accepted box.
+    ///
+    /// `check_params` checks the three ranges and then `m_cost >= 4 * p_cost`,
+    /// which reads like a fourth bound. It is not one, and `docs/SPEC.md` section 7.2
+    /// listing it alongside the other rules makes that easy to miss. Once the
+    /// ranges have been applied, `p_cost` is at most 16 and `m_cost` at least
+    /// 32768, so `4 * p_cost` is at most 64 — and Argon2's own requirement is
+    /// already met with three orders of magnitude to spare. No input reaches it.
+    ///
+    /// Which means the check cannot be tested by feeding it a value, so this test
+    /// does the two things that are possible instead. It sweeps the eight corners
+    /// of the box, where a reachable rule would be tightest, and it asserts the
+    /// inequality the box depends on, so that raising `P_COST_CEILING` far enough
+    /// to make the rule live fails here and says so.
+    ///
+    /// The check stays. Deleting it would remove the guard for a future that raises
+    /// the lane ceiling, and the cost of keeping it is one comparison that a
+    /// compiler can fold away for the values that can actually arrive.
+    #[test]
+    fn the_four_blocks_per_lane_rule_cannot_fire_inside_the_accepted_box() {
+        // The corner sweep. If the rule were reachable, a corner is where it would
+        // be tightest: the fewest blocks and the most lanes.
+        for &m_cost in &[M_COST_FLOOR, M_COST_CEILING] {
+            for &t_cost in &[T_COST_FLOOR, T_COST_CEILING] {
+                for &p_cost in &[P_COST_FLOOR, P_COST_CEILING] {
+                    assert!(
+                        check_params(m_cost, t_cost, p_cost).is_ok(),
+                        "the corner ({m_cost}, {t_cost}, {p_cost}) was refused, so the \
+                         four-blocks-per-lane rule is reachable after all"
+                    );
+                }
+            }
+        }
+
+        // The inequality the box gives the check, stated so a change to either
+        // constant that would make the rule live fails here rather than leaving the
+        // check and the specification quietly disagreeing.
+        let worst_lane_requirement = 4 * P_COST_CEILING;
+        assert!(
+            M_COST_FLOOR > worst_lane_requirement,
+            "M_COST_FLOOR is {M_COST_FLOOR} and four lanes at P_COST_CEILING need \
+             {worst_lane_requirement}, so the rule is reachable inside the box. That \
+             is allowed, but the comment on the check and docs/SPEC.md section 7.2 both \
+             say it is not, so they now need rewriting."
+        );
+
+        // And the widest gap, for the record: Argon2 needs 64 blocks at the lane
+        // ceiling and the box guarantees 32768.
+        assert_eq!(worst_lane_requirement, 64);
+        assert_eq!(M_COST_FLOOR, 32_768);
     }
 
     #[test]
