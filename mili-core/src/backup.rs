@@ -316,7 +316,13 @@ impl Backup {
         )?;
         let aead = AeadKey::from_secret(&wrap_key)?;
 
-        let mut region = self.0[HEADER_SIZE..].to_vec();
+        // `Zeroizing` rather than a plain `Vec`, for the same reason
+        // `KeyFile::open_payload` zeroes its decrypted payload: this buffer holds
+        // recovered key material, so when it is dropped it should be zeroed rather
+        // than handed back to the allocator holding the keys a backup exists to
+        // protect. `parse_entries` copies the keys out into their own types, so
+        // nothing here needs the region afterwards.
+        let mut region = Zeroizing::new(self.0[HEADER_SIZE..].to_vec());
         aead.open_in_place(AeadNonce::ZERO, &self.0[..HEADER_SIZE], &mut region)?;
         if region.len() != header.entries_len {
             return Err(Error::Failed);

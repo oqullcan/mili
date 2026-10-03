@@ -25,8 +25,9 @@ wrong, so these are in scope:
   a distinguishable result — anything that breaks the uniformity claim in
   `README.md` rule 4 or `docs/THREAT_MODEL.md` section 3.
 - An attacker-controlled length, index or count that reaches an allocation or a
-  copy before it is bounded. `docs/SPEC.md` section 6 requires every length to be
-  checked against a documented limit first.
+  copy before it is bounded. Every length mili reads out of a file is checked
+  against a documented limit first: `docs/SPEC.md` sections 5.4, 7.2, 8 and
+  18.1 are where those limits and the checks are written down.
 - A plaintext that is released before the data covering it has been
   authenticated, in `mili-core` or across the C ABI in `mili-ffi`.
 - A panic, an out of bounds access or a use after free in `mili-ffi`. A panic

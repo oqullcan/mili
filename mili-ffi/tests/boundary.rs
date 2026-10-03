@@ -144,50 +144,107 @@ fn open_sealed(sealed: &[u8], seeds: &[Vec<u8>]) -> Result<Vec<u8>, i32> {
 // ---------------------------------------------------------------------------
 
 const HEADER: &str = include_str!("../include/mili.h");
+const SOURCE: &str = include_str!("../src/lib.rs");
+
+/// Every function `mili-ffi` exports, read out of the source.
+///
+/// This used to be a list written out by hand, and it was three entries short of
+/// the twenty-nine the crate exports — the ones added when the backup inspection
+/// and key identifier work landed. Nothing noticed, because the test iterated over
+/// the hand-written list and asked whether the header declared each entry. It
+/// never asked whether the crate exported something the list had forgotten, so
+/// "nothing exported is missing from the header", which is what the test's own
+/// comment claimed it checked, was not a property of anything.
+///
+/// The list is now read out of `src/lib.rs`. Deriving an expectation from the
+/// thing under test is normally the wrong move — a test that computes its own
+/// answer checks nothing — but the thing under test here is the *header*.
+/// `src/lib.rs` is the authority for what exists, and the header is the artefact
+/// that is hand written and can drift from it. So the source is an input to the
+/// check and the header is what gets verified, which is the direction a C compiler
+/// sees.
+fn exported_names() -> Vec<String> {
+    let mut names: Vec<String> = SOURCE
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix(EXPORT_PREFIX)?;
+            Some(rest.split(['(', ' ']).next()?.to_owned())
+        })
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// Every function the header declares, read out of the header.
+fn declared_names() -> Vec<String> {
+    HEADER
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix(RETURN_PREFIX)?;
+            // A declaration is a name followed by an argument list. A line that
+            // merely mentions a function in prose has no parenthesis, and reading
+            // its first word as a declaration is how a comment becomes a phantom
+            // entry.
+            let (name, arguments) = rest.split_once('(')?;
+            let name = name.trim();
+            (!name.is_empty() && !arguments.is_empty()).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The prefix every export in `src/lib.rs` starts with.
+const EXPORT_PREFIX: &str = "pub unsafe extern \"C\" fn ";
+
+/// The prefix every declaration in the header starts with.
+const RETURN_PREFIX: &str = "int32_t ";
 
 #[test]
-fn the_header_agrees_with_the_exported_functions() {
-    // The list is written out rather than derived, because deriving it needs a
-    // symbol table this crate cannot read, and a test that derives its own
-    // expectation from the thing under test checks nothing. A new export has to be
-    // added here as well, which is the point: the commit that adds a function also
-    // adds it to the header and to this list.
-    const EXPORTED: &[&str] = &[
-        "mili_sealing_key_size",
-        "mili_encapsulation_key_size",
-        "mili_signing_key_size",
-        "mili_verifying_key_size",
-        "mili_signature_size",
-        "mili_symmetric_key_size",
-        "mili_sealed_box_overhead",
-        "mili_stream_overhead",
-        "mili_sealing_key_generate",
-        "mili_signing_key_generate",
-        "mili_symmetric_key_generate",
-        "mili_encapsulation_key_from_seed",
-        "mili_seal",
-        "mili_open",
-        "mili_sign",
-        "mili_verify",
-        "mili_verifying_key_from_seed",
-        "mili_seal_stream",
-        "mili_open_stream",
-        "mili_key_file_wrap_sealing",
-        "mili_key_file_wrap_signing",
-        "mili_key_file_unwrap",
-        "mili_key_file_payload_type",
-        "mili_key_file_rotate",
-        "mili_backup_create",
-        "mili_backup_open",
-    ];
+fn the_source_names_functions_this_test_could_have_missed() {
+    // A guard on the guard. If `exported_names` stopped matching the shape of the
+    // source, the two checks below would pass vacuously on an empty list, so the
+    // count is asserted against a count computed a different way rather than
+    // assumed.
+    let names = exported_names();
+    assert_eq!(
+        names.len(),
+        SOURCE.matches(EXPORT_PREFIX).count(),
+        "the extractor and the source disagree about how many functions are exported"
+    );
+    assert!(names.len() >= 29, "only {} exports found", names.len());
+    assert!(
+        names.iter().any(|n| n == "mili_key_id"),
+        "a known export is missing"
+    );
+}
 
-    for name in EXPORTED {
+#[test]
+fn every_exported_function_is_declared_in_the_header() {
+    let declared = declared_names();
+    assert!(!declared.is_empty(), "no declarations found in the header");
+    for name in exported_names() {
         assert!(
-            HEADER.contains(&format!("int32_t {name}(")),
+            declared.contains(&name),
             "{name} is exported but not declared in the header"
         );
     }
+}
 
+#[test]
+fn the_header_declares_nothing_the_source_does_not_export() {
+    // The other direction: a declaration with no definition is an implicit
+    // declaration waiting to happen for anyone compiling against an older header
+    // than the library they link.
+    let exported = exported_names();
+    for name in declared_names() {
+        assert!(
+            exported.contains(&name),
+            "{name} is declared in the header but not exported by the library"
+        );
+    }
+}
+
+#[test]
+fn the_header_declares_every_return_code() {
     // Every code the library defines is documented in the header.
     for (name, code) in [
         ("MILI_OK", MILI_OK),

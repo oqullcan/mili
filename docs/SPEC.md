@@ -236,9 +236,13 @@ ofs  len  field
 4    1    format_type = 0x03
 5    1    version = 0x01
 6    3309 mldsa65_sig
-3370 64   ed25519_sig
-3434 total
+3315 64   ed25519_sig
+3379 total
 ```
+
+The six byte prefix is the header of section 2 and is not part of either
+signature; `SIGNATURE_PAYLOAD_SIZE` is the 3373 bytes from offset 6 onward, and
+`SIGNATURE_SIZE` is the 3379 bytes a caller allocates to hold the file.
 
 ### 6.1 Key sizes
 
@@ -246,7 +250,16 @@ ofs  len  field
 |--------|------|---------|
 | signing key | 64 | ML-DSA-65 seed (32) \|\| Ed25519 seed (32) |
 | verifying key | 1984 | ML-DSA-65 public key (1952) \|\| Ed25519 public key (32) |
-| signature | 3373 | ML-DSA-65 signature (3309) \|\| Ed25519 signature (64) |
+| signature payload | 3373 | ML-DSA-65 signature (3309) \|\| Ed25519 signature (64) |
+| signature file | 3379 | the payload above behind a six byte header |
+
+The last two rows are both needed because they used to be conflated: an earlier
+revision of this table gave the payload offsets with the header's own offsets
+stitched in front, which put the Ed25519 half 55 bytes late and the total at
+3434. A reader building a parser from it would have rejected every signature
+`mili` writes, and `mili-core` names the two constants differently —
+`SIGNATURE_PAYLOAD_SIZE` and `SIGNATURE_SIZE` — precisely so that the difference
+is visible at every use.
 
 ### 6.2 Transcript
 
@@ -443,8 +456,10 @@ what it is.
 
 ### 7.3 Loss of a key
 
-Losing a key file is not detectable by mili: every failure mode returns
-`Error::Failed`. Recovery is by restoring the file or the backup container of
+Losing a key file is not detectable by mili: every failure mode that means "this
+is not the key file you are looking for" returns `Error::Failed`. A file whose
+version byte is not `0x01` returns `Error::UnsupportedVersion` instead, which is
+the one distinguishable outcome by design — see section 2 for why. Recovery is by restoring the file or the backup container of
 section 8. The backup container is the only mechanism mili provides for this,
 and it is not optional in the sense that it is the designed path: a key whose
 only copy is one file has no recovery path.
@@ -550,11 +565,15 @@ signature scheme of section 6, never from the KEM.
 
 ## 10. Recipient and key identifiers
 
-mili-v1 writes no recipient identifier and no key identifier into any format.
+mili-v1 writes no recipient identifier into any format, and writes a key
+identifier only where the whole point of the container is to hold several keys
+under one password — section 11, which is the backup container and nothing else.
+No sealed box, stream or key file carries one.
+
 This is a deliberate deviation from age, which names each recipient in a
 cleartext stanza, and from COSE, which carries a `kid`.
 
-`open` takes an iterator of candidate keys and attempts them in order. The
+`open` takes a slice of candidate keys and attempts them in order. The
 number of attempts is observable, so the *size* of a recipient's key set leaks.
 The identity behind a file does not.
 
@@ -646,7 +665,8 @@ inventing a key schedule, which the mili rules do not allow. The two
 
 ### 12.1 Rotation
 
-Rotation produces a new seed and re-wraps. It does not migrate existing files.
+Rotation produces a new salt and re-wraps the same payload. It does not migrate
+existing files.
 
 - Key file rotation: open with the old password, generate a new `argon2_salt`,
   write the same payload under the same parameters.
@@ -663,17 +683,17 @@ Both use STREAM with 64 KiB chunks and the same nonce structure.
 |----------|--------|---------|
 | Chunk size | 64 KiB | 64 KiB |
 | Chunk nonce | `counter_be(88) \|\| flag` | same |
-
-`counter_be(88)` is age's name for the encoding: the counter occupies an 88 bit
-field, of which mili uses 64 and leaves the top 24 bits zero. That matches age's
-framing while the counter itself is a `u64`, so the real bound is `2^64` chunks
-as section 5.2 says.
 | Chunk key | fixed payload key | fixed file key |
 | Associated data | none | `header \|\| counter \|\| flag` |
 | Header integrity | separate MAC key | header is the AEAD AAD of every chunk |
 | Payload key derivation | `HKDF(file_key, salt = header_nonce, info = "payload")` from a 16 byte file key | `HKDF(ss, salt = salt, info = "mili-v1:stream")`, file key is the 32 byte KEM output |
 | Recipients | named in cleartext stanzas | none |
 | Algorithms | X25519 + ChaCha20-Poly1305, scrypt | X-Wing + ChaCha20-Poly1305, Argon2id |
+
+`counter_be(88)` is age's name for the encoding: the counter occupies an 88 bit
+field, of which mili uses 64 and leaves the top 24 bits zero. That matches age's
+framing while the counter itself is a `u64`, so the real bound is `2^64` chunks
+as section 5.2 says.
 
 mili uses associated data where age uses none so that a modified counter or a
 flipped final flag is an explicit associated-data mismatch rather than a silent
@@ -751,12 +771,16 @@ A build is reproducible from the repository alone when the following hold:
   - `libc` writes no file. It derives `rustc-cfg` values from
     `CARGO_CFG_TARGET_ENV`, `CARGO_CFG_TARGET_OS`, `CARGO_CFG_TARGET_POINTER_WIDTH`
     and `CARGO_CFG_TARGET_ARCH`.
-  - `curve25519-dalek` writes no file either, and reads the same `CARGO_CFG_*`
-    variables to pick a 32 or 64 bit backend. A backend the target cannot support
-    is a `panic!` in the build script rather than a silent fallback.
+  - `curve25519-dalek` writes no file either, and reads `CARGO_CFG_TARGET_FEATURE`,
+    `CARGO_CFG_TARGET_ARCH` and `CARGO_CFG_TARGET_POINTER_WIDTH` plus two of its
+    own override variables to pick a 32 or 64 bit backend. That is a different set
+    from `libc`'s, so "the same variables" would have been wrong. A backend the
+    target cannot support is a `panic!` in the build script rather than a silent
+    fallback.
 
-  Two of them, `libc` and `curve25519-dalek` through `rustc_version`, also run
-  `$RUSTC -vV` and use the reported version in a decision. Cargo sets the compiler,
+  Two of them also run `$RUSTC -vV` and use the reported version in a decision:
+  `curve25519-dalek` through the `rustc_version` crate, and `libc` through its own
+  `rustc_version_cmd` helper, which calls `rustc --version` directly. Cargo sets the compiler,
   so this is the compiler's own trust boundary rather than a new one, but it is the
   reason the claim above is about the network and the clock and not about the
   environment in general.
@@ -808,8 +832,19 @@ that contains `unsafe` code; `mili-core` is `#![forbid(unsafe_code)]` and stays
 that way, which is the reason the crate exists.
 
 This section is normative for the boundary's shape. The functions are declared in
-`../mili-ffi/include/mili.h`, which is hand written and checked against the exported
-symbols by a test.
+`../mili-ffi/include/mili.h`, which is hand written and checked against the source
+by a test that reads both and fails in either direction.
+
+One boundary restriction is narrower than the format and is recorded here rather
+than left to be discovered: `mili_backup_create` refuses an empty key list, while
+section 8 and `Backup::from_keys` both allow `entry_count = 0` and
+`mili-core` has a test for that container round-tripping. The C binding and the
+Go binding refuse it too, so a C or Go caller and a Rust caller given the same
+empty list disagree about whether it is a container. It is a useful thing for the
+boundary to refuse and a defensible thing for the format to allow — a zero-key
+container is a mistake, and the boundary is where a mistake in a caller's argument
+is cheapest to catch — but it is a restriction the format does not state, so it is
+stated here.
 
 ### 18.1 Rules
 
@@ -831,6 +866,11 @@ symbols by a test.
 6. **Nothing is negotiated or configured.** One suite per format version. No function
    selects an algorithm or reads the environment.
 
+Rule 4 has two exceptions, both of which fix their output size in the format and
+so have no capacity to check: `mili_key_id` always writes 16 bytes, and
+`mili_backup_info` always writes 16. Both report `MILI_BUFFER_TOO_SMALL` for a
+smaller capacity, and neither writes a length because the caller already knows it.
+
 Rules 4 and 6 have a stated cost. Rule 4 means a caller asks the library twice, once
 for a size and once for the result, where a fixed-size convention would have been one
 call. It is there because of what happened without it: the first version had two
@@ -846,7 +886,7 @@ compatibility shim for anything, which is the same position `mili-core` takes.
 | 1 | `MILI_FAILED` | every failure mili does not distinguish |
 | 2 | `MILI_UNSUPPORTED_VERSION` | the data names a format version this build does not implement |
 | 3 | `MILI_INTERNAL` | a caught panic, or an invariant that did not hold |
-| 4 | `MILI_IO` | an I/O error from a caller-supplied stream |
+| 4 | `MILI_IO` | an I/O error. **No entry point currently returns it** — see below |
 | 5 | `MILI_BUFFER_TOO_SMALL` | the caller's output buffer was too small |
 
 Only 1 is the uniform failure. 2, 3 and 4 are statements about the caller's data,
@@ -855,6 +895,15 @@ about the caller's own allocation.
 
 A caller cannot distinguish a wrong key from a corrupted file from a wrong password,
 and the boundary does not add a way to. See `THREAT_MODEL.md` section 2.12.
+
+`MILI_IO` is defined and mapped but unreachable, because no function takes a
+stream. `mili_seal_stream` writes into a buffer the library allocates and
+`mili_open_stream` reads from a cursor over bytes the caller already has, so
+neither can fail on I/O the library did not do itself. The code is kept because
+`mili-core`'s `Error::Io` is reachable from its `Read` and `Write` bounds and a
+boundary that could not express it would have to map it to `MILI_INTERNAL`, which
+would be a worse answer than an unused code. The Go binding says the same thing in
+its own documentation rather than pretending the mapping is live.
 
 ### 18.3 Sizes
 
@@ -908,9 +957,13 @@ the types stops that from happening by accident.
 It stops it by accident, which is weaker than in `mili-core`. There the types are
 distinct newtypes with no conversions, so the mismatch does not compile. Go permits
 an explicit conversion between named types sharing an underlying type, so
-`mili.SealingKey(aSymmetricKey)` compiles, and `keys.go` says so and
-`keyfile_test.go` does exactly that once to show the library reports the payload
-kind rather than guessing. The residual defence is that each function states the
+`mili.SealingKey(aSymmetricKey)` compiles, and `keys.go` says so.
+`keyfile_test.go` does it three times: a signing key handed to the sealing
+wrapper, a sealing key handed to the signing wrapper, and a symmetric key handed
+to the sealing wrapper — the last of which the library accepts, because a key file
+stores the key under a password and nothing about a symmetric key makes it
+unwrappable. All three show the library reporting the payload kind rather than
+guessing. The residual defence is that each function states the
 kind it expects to the library and checks what it is handed, so the conversion
 produces a file the caller can read back but not one that silently becomes the key
 they thought it was.

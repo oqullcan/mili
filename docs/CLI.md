@@ -58,11 +58,17 @@ from. A CLI has to answer that question and a library does not.
 Ente's `AccountSecrets` derives `Zeroize` and `#[zeroize(drop)]`, and then every
 use site clones it into a plain `Vec<u8>` to write to SQLite. The wrapper is
 zeroized; the copy is not, and the copy is the one that lives in the database and
-in SQLite's page cache. `mili-core` already returns `SecretBytes<N>` and has no
-`into_vec` on the paths that matter, so a CLI built on it starts out better than
-that; the discipline it has to keep is not to clone out of a `SecretBytes` into a
-local and then drop the original. When a value has to become a `Vec<u8>` to reach
-an operating system call, that `Vec<u8>` is a `SecretBytes` too.
+in SQLite's page cache.
+
+`mili-core` starts out better than that, for two structural reasons rather than one.
+Every key type wraps a `SecretBytes<N>` that zeroes on drop, and none of them
+offers a `into_vec` — the two that hand bytes back, `KeyFile::into_bytes` and
+`Backup::into_bytes`, return the *container*, not the key, and those bytes are
+ciphertext. So a CLI cannot accidentally get at a key as a plain slice. The
+discipline it has to keep is not to copy out of a key type into a local `Vec<u8>`
+and then drop the original, and anything reaching an operating system call has to
+be wrapped as it goes. `docs/THREAT_MODEL.md` section 4.1 records which of mili's
+own buffers get this treatment and which deliberately do not.
 
 ### Test the binary, not the library
 

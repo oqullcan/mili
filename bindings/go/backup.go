@@ -148,6 +148,12 @@ func entry(payloadType int, key []byte) []byte {
 
 // Build writes the container. Two keys with the same identifier are refused: a backup
 // that holds the same key twice is a backup whose contents a reader cannot describe.
+//
+// An empty key list is refused too, which is narrower than docs/SPEC.md section 8 —
+// that allows entry_count = 0 and mili-core has a test for it — and narrower than the
+// C ABI, which also refuses. docs/SPEC.md section 18 records the restriction, so a
+// Rust caller and a Go caller can be relied on to differ here deliberately rather
+// than by accident.
 func (b *BackupBuilder) Build(password []byte) (Backup, error) {
 	if len(b.entries) == 0 {
 		return nil, fmt.Errorf("mili: a backup needs at least one key")

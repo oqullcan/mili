@@ -34,14 +34,20 @@ Those are section 6.
 
 ### 2.1 Confidentiality of file contents
 
-ChaCha20-Poly1305 under a key derived from the X-Wing shared secret. An
-adversary without the recipient's key or the KEM shared secret cannot read
-plaintext. Mitigated by sections 4, 5 and 9 of `SPEC.md`.
+ChaCha20-Poly1305 everywhere. For the sealed box and the stream the key is a
+HKDF-Expand of the X-Wing shared secret, so an adversary without the recipient's
+key or the KEM shared secret cannot read the plaintext. For the key file and the
+backup container there is no KEM at all: the key is `HKDF(Argon2id(password))`,
+so an adversary without the password cannot read it and an adversary with the
+shared secret is not the relevant party. Both are the same guarantee against a
+different secret, and neither is stronger for being one of them. Mitigated by
+sections 4, 5, 7, 8 and 9 of `SPEC.md`.
 
 ### 2.2 Integrity of header, ciphertext and chunks
 
-The header, including the magic, format type, version, salt and KEM ciphertext,
-is the AEAD associated data of every ciphertext in the file. Poly1305 covers the
+The header, including the magic, format type, version and salt, is the AEAD
+associated data of every ciphertext in the file; for the sealed box and the
+stream that header also carries the KEM ciphertext. Poly1305 covers the
 associated data and the ciphertext. Any modification is a decryption failure.
 Mitigated by the key schedules in `SPEC.md` sections 4.1 and 5.2.
 
@@ -50,8 +56,11 @@ Mitigated by the key schedules in `SPEC.md` sections 4.1 and 5.2.
 Two files share an AEAD key only if they share the 32 byte `salt`, because the
 key is a HKDF-Expand of the salt. Within a stream file the nonce is a strictly
 increasing 64 bit counter, which cannot repeat before the file reaches 2^64
-chunks, at which point the writer returns `Error::Internal` rather than
-wrapping. The writer never transmits a nonce and the caller never sees one.
+chunks, at which point the writer returns `Error::Failed` rather than wrapping.
+`Error::Failed` rather than `Error::Internal` because the counter is exhausted by
+a legitimate 2^64 chunk file, not by a violated invariant, and because the
+uniform-failure property of section 2.12 is worth more than a more precise code
+for a case no caller will reach. The writer never transmits a nonce and the caller never sees one.
 
 Mitigated by construction, not by caller discipline.
 
@@ -60,7 +69,7 @@ Mitigated by construction, not by caller discipline.
 The chunk nonce and the associated data both contain the chunk counter, which
 the reader requires to advance by exactly one. A chunk presented at the wrong
 index is decrypted with the wrong nonce and the wrong associated data. Mitigated
-by `SPEC.md` section 5.3.
+by `SPEC.md` section 5.4.
 
 ### 2.5 Truncation from the end
 
@@ -81,7 +90,7 @@ rule age uses. Mitigated, with the ambiguity recorded in `SPEC.md` section 5.3.
 ### 2.6 Appending to a stream
 
 After the final chunk the reader requires end of input. Trailing bytes are
-`Error::Failed`. Mitigated by `SPEC.md` section 5.3.
+`Error::Failed`. Mitigated by `SPEC.md` section 5.4.
 
 ### 2.7 Key derivation context collision
 
@@ -289,8 +298,28 @@ would require a trusted source that mili does not assume. Not mitigated.
 
 Copies of key material can exist in memory outside mili's control: the
 caller's buffers, the `Hkdf` object, upstream crate internals, allocator
-retained copies after free, and swap. mili zeroizes what it allocates and
-nothing else.
+retained copies after free, and swap. mili zeroizes the buffers it allocates
+that hold key material, and specifically does not zeroize the ones that hold
+plaintext. Both halves of that sentence are deliberate.
+
+Zeroized: the secret types of section 2.11, `rng::fill`'s buffer on failure, and
+the decrypted buffers in `KeyFile::open_payload` and `Backup::open`. Those two
+last are `Zeroizing<Vec<u8>>` rather than `Vec<u8>` for the same reason — they
+hold recovered key material, and when they are dropped they should be zeroed
+instead of handed back to the allocator holding the keys a backup exists to
+protect. `Backup::open` was the last of the two to be changed; it had the plain
+`Vec` while `KeyFile::open_payload` already had `payload.zeroize()`, and nothing
+about the difference was visible from the outside.
+
+Not zeroized: the plaintext buffers in `stream.rs`. `StreamReader::read` fills a
+`Vec<u8>` the reader owns and `open_buffered` reads through an 8 KiB `block`, and
+neither is cleared on drop. The plaintext in them is the caller's own data, which
+the caller already holds in the buffer it passed in, so clearing mili's copy on
+drop removes nothing an attacker reading the process could not read from the
+caller's side — and it costs a write over every byte streamed, on a path whose
+whole purpose is throughput. This is a judgement, not a proof: a caller that
+streams plaintext it does not otherwise hold is relying on the OS to protect it,
+and should say so in its own documentation.
 
 ### 4.2 Stack depth and side channels in mili's own control flow
 

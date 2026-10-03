@@ -86,7 +86,7 @@ length nothing checks there.
 
 ## Miri coverage is narrow on purpose
 
-Roughly 141 of the 216 library tests are `#[cfg(not(miri))]`, and that is not an
+Roughly 142 of the 217 library tests are `#[cfg(not(miri))]`, and that is not an
 oversight to be tidied. A test that decapsulates goes through X-Wing, which is
 ML-KEM-768 and X25519, and interpreting either of those is not something a six
 minute job should do. The stream module looks like the exception because it is
@@ -125,6 +125,12 @@ Then, for a new dependency:
    under `[bans.features]` explaining any feature you turned off. That check is
    `exact = true`, so a feature added anywhere fails the build until it is listed,
    which is the intended behaviour rather than an annoyance to work around.
+
+   `hybrid-array` is the one direct dependency without an entry, on purpose: its
+   features are chosen by whoever depends on it — `ml-kem`, `ml-dsa` and others
+   each turn on a different combination — so an exact entry would be pinning the
+   union of every upstream choice, which is not a decision mili makes. `deny.toml`
+   says so where `cargo deny` reads it.
 
 ## Adding a format
 

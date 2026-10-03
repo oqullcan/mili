@@ -143,6 +143,26 @@ func (f KeyFile) UnwrapSigning(password []byte) (SigningKey, error) {
 	return SigningKey(result), nil
 }
 
+// UnwrapSymmetric opens a key file that holds a [SymmetricKey].
+//
+// This is the other half of [WrapSymmetricKeyFile]. A [SymmetricKey] is not tied to
+// a public-key algorithm, so it has no format that encrypts with it — docs/SPEC.md
+// section 12.0 records that as a decision — but a key file stores the key itself
+// under a password, and mili-core and the C ABI both read one. Without this the Go
+// binding could write a symmetric key file and not read it back.
+//
+// The password is the only thing protecting such a file, which is also true of the
+// other two kinds. What is different is that a symmetric key file cannot be
+// recovered from anywhere else, so losing the password loses the key rather than
+// only the ability to read it with a public key that still exists elsewhere.
+func (f KeyFile) UnwrapSymmetric(password []byte) (SymmetricKey, error) {
+	result, err := f.unwrap(PayloadSymmetric, password)
+	if err != nil {
+		return nil, err
+	}
+	return SymmetricKey(result), nil
+}
+
 // Rotate rewrites this key file under the same password with a fresh salt, as docs/SPEC.md
 // section 12.1 defines rotation.
 //

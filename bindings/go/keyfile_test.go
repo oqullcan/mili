@@ -256,3 +256,39 @@ func TestASymmetricKeyHasNoKeyFileYet(t *testing.T) {
 		t.Error("the symmetric key came back different")
 	}
 }
+
+// A Go program can write a symmetric key file and read it back. It could not
+// before UnwrapSymmetric existed, because WrapSymmetricKeyFile was added without
+// its counterpart — so the binding could produce a file whose only reader was
+// written in another language.
+func TestUnwrapSymmetricKeyFile(t *testing.T) {
+	key, err := GenerateSymmetricKey()
+	if err != nil {
+		t.Fatalf("GenerateSymmetricKey: %v", err)
+	}
+	file, err := WrapSymmetricKeyFile(key, []byte(testPassword))
+	if err != nil {
+		t.Fatalf("WrapSymmetricKeyFile: %v", err)
+	}
+
+	opened, err := file.UnwrapSymmetric([]byte(testPassword))
+	if err != nil {
+		t.Fatalf("UnwrapSymmetric: %v", err)
+	}
+	if string(opened) != string(key) {
+		t.Error("the key came back different")
+	}
+
+	// The other two openers still refuse it, so the three stay distinct.
+	if _, err := file.UnwrapSealing([]byte(testPassword)); !errors.Is(err, ErrFailed) {
+		t.Errorf("a symmetric key file opened as a sealing key: %v, want ErrFailed", err)
+	}
+	if _, err := file.UnwrapSigning([]byte(testPassword)); !errors.Is(err, ErrFailed) {
+		t.Errorf("a symmetric key file opened as a signing key: %v, want ErrFailed", err)
+	}
+
+	// And the wrong password is refused.
+	if _, err := file.UnwrapSymmetric([]byte("wrong password")); !errors.Is(err, ErrFailed) {
+		t.Errorf("a wrong password gave %v, want ErrFailed", err)
+	}
+}

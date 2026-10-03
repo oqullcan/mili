@@ -26,7 +26,7 @@ The short version:
 - `docs/DISCLAIMER.md` — what mili does not do, and the words mili does not use
 - `docs/CLI.md` — why there is no CLI, and what one would have to get right
 - `SECURITY.md` — what to report, and what is already a documented position
-- `CONTRIBUTING.md` — the checks, and the four failures that have broken CI
+- `CONTRIBUTING.md` — the checks, and the five failures that have broken CI
 
 ## Suite
 
@@ -238,17 +238,17 @@ four things CodeQL's highest-yield Rust queries look for. Grepping the crate for
 case.
 
 That leaves `mili-ffi` as the only place a static analyser has anything to read,
-and it is a thin boundary over byte buffers that returns an error code: 64 lines
-of `unsafe`, all of it pointer arithmetic into caller-owned buffers, covered by 32
-boundary tests including a header that is checked against the exported symbol
-list. The finding classes that would apply to unsafe Rust are largely
-unsupported by CodeQL today.
+and it is a thin boundary over byte buffers that returns an error code: about
+sixty lines of `unsafe`, all of it pointer arithmetic into caller-owned buffers,
+covered by about forty boundary tests, including a header that is checked against
+the source in both directions. The finding classes that would apply to unsafe Rust
+are largely unsupported by CodeQL today.
 
 The checks that do apply are already present. Hardcoded credentials are covered by
 secret scanning, which is enabled with push protection. Panics on malformed input,
 which is the failure this library most cares about, are covered by
 `clippy::arithmetic_side_effects` being denied, six fuzz targets with committed
-regressions, and 284 tests.
+regressions, and just over three hundred tests.
 
 So the honest summary is that CodeQL would be a fifth layer over code that has
 almost no surface for it. If the library later grows a filesystem, network or
@@ -303,7 +303,7 @@ the kind it expects and checks what it is handed.
 tests run an ML-KEM-768 decapsulation or an ML-DSA-65 signature per case. The
 stream tamper sweeps do one decapsulation per tested byte. And the password
 based tests do an Argon2id derivation, which at the documented profile touches
-64 MiB three times and takes about 120 ms.
+64 MiB three times and takes about 200 ms.
 
 That last number is why `argon2` and `blake2` are compiled at `opt-level = 3`
 even in the development profile, in `Cargo.toml`. Unoptimised, one derivation
@@ -329,7 +329,7 @@ are the tests that call Argon2id, one exhaustive Wycheproof sweep is ignored
 there, and the sealed box byte sweep is reduced to one position per region because
 each authenticated operation costs about ten seconds when interpreted.
 
-The exclusions are not loose. Roughly 131 of the 193 library tests are gated, and
+The exclusions are not loose. Roughly 142 of the 217 library tests are gated, and
 an attempt to widen the gate was made and abandoned: the stream module looks like
 the obvious candidate because it is ChaCha20-Poly1305 and HKDF with no KEM, but
 its tests go through `seal_buffered`, which decapsulates, which is X-Wing, which

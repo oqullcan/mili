@@ -8,9 +8,12 @@
  * boundary deserves.
  *
  * The consequence is that this file is checked against `src/lib.rs` by
- * `tests/header.rs`, which reads both and fails if an exported function is missing
- * here or if a signature disagrees. That test is the reason a hand written header is
- * safe to keep.
+ * `tests/boundary.rs`, which reads both at compile time and fails if a function is
+ * exported without a declaration here, or declared here without a definition in the
+ * library. That test is the reason a hand written header is safe to keep. It used
+ * to keep its own list of the exported names instead of reading them out of the
+ * source, and the list quietly fell three entries behind without anything noticing,
+ * so the list is gone.
  *
  * Rules, which `src/lib.rs` states at length and this header repeats because a C
  * caller should not have to open a Rust file to learn them:
