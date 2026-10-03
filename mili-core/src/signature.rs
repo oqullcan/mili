@@ -185,11 +185,32 @@ impl SigningKey {
 
     /// Signs `message` and returns the `mili-sig-v1` encoding.
     ///
+    /// The ML-DSA half is signed hedged: FIPS 204's randomised variant, with 32
+    /// bytes from [`crate::rng`], which is the only randomness source mili has and
+    /// which offers no caller-supplied alternative. The ML-DSA signature is
+    /// therefore not a function of the key and the message alone, and no fault
+    /// attack that a deterministic signer is exposed to applies here.
+    ///
+    /// That is the whole of what this buys, and it is worth not claiming more:
+    /// the composite signature is still linkable, because the Ed25519 half is
+    /// deterministic and is carried verbatim. See `THREAT_MODEL.md` section 3.6
+    /// and the test named `the_ed25519_half_is_still_deterministic`.
+    ///
+    /// Verification is unaffected. The encoding is still `mili-sig-v1` at
+    /// [`SIGNATURE_SIZE`] bytes and the Ed25519 half is unchanged; the randomness
+    /// travels inside the ML-DSA signature, which is where FIPS 204 puts it.
+    ///
     /// # Errors
     ///
-    /// [`Error::Internal`] if a component refuses to sign. ML-DSA-65 returns an
-    /// error only for a context string longer than 255 bytes, and the label is 29
-    /// bytes, so this is not reachable from any input.
+    /// [`Error::Failed`] if the operating system randomness source is
+    /// unavailable. FIPS 204 has no signature that needs no randomness, so failing
+    /// closed is the only honest option; signing with a weak or repeated value
+    /// would risk a forgery, not merely a weaker signature.
+    ///
+    /// ML-DSA-65 also returns an error for a context string longer than 255 bytes,
+    /// which is unreachable here because the label is a 30 byte constant. That
+    /// shares the error type with the randomness failure and cannot be told apart
+    /// from it, so it is reported as [`Error::Failed`] too.
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         let transcript = transcript(message);
         let (mldsa_seed, ed25519_seed) = split(&self.0);
@@ -197,8 +218,8 @@ impl SigningKey {
         let mldsa_key = MlDsaSigningKey::<MlDsa65>::from_seed(&Array::from(*mldsa_seed));
         let mldsa_signature = mldsa_key
             .expanded_key()
-            .sign_deterministic(&transcript, LABEL)
-            .map_err(|_| Error::Internal)?;
+            .sign_randomized(&transcript, LABEL, &mut crate::rng::TryRng)
+            .map_err(|_| Error::Failed)?;
         let mldsa_bytes = ml_dsa_signature_bytes(mldsa_signature.encode());
 
         let ed25519 = ed25519_dalek::SigningKey::from_bytes(&ed25519_seed);
@@ -788,6 +809,103 @@ mod tests {
         ));
     }
 
+    /// Two signatures over the same message differ, and both verify.
+    ///
+    /// FIPS 204 has an optional deterministic variant and `sign_deterministic`
+    /// is the one mili used, so every signature a key produces was a function of
+    /// that key and that message alone. Anyone holding two documents signed by
+    /// the same identity could therefore link them from the ML-DSA half. Hedging
+    /// removes that, at the cost of one more call to the RNG that was already
+    /// there. It does not make the composite unlinkable; see
+    /// `the_ed25519_half_is_still_deterministic`.
+    ///
+    /// Written so it cannot pass by accident: if signing is still deterministic
+    /// the two signatures are equal and the first assertion fails; if signing is
+    /// randomised but the signatures do not verify, the second fails.
+    #[test]
+    #[cfg(not(miri))]
+    fn two_signatures_of_the_same_message_differ_and_both_verify() {
+        let mut seed = [0x5Au8; SIGNING_KEY_SIZE];
+        seed[..32].copy_from_slice(&[0x21u8; 32]);
+        seed[32..].copy_from_slice(&[0xA3u8; 32]);
+        let key = SigningKey::from_bytes(seed);
+        let message = b"a message that is signed twice";
+
+        let first = key.sign(message).expect("sign");
+        let second = key.sign(message).expect("sign");
+
+        assert_ne!(
+            first, second,
+            "two signatures over the same message with the same key are identical, \
+             which means the ML-DSA half is deterministic and its outputs are linkable"
+        );
+
+        let verifying = key.verifying_key();
+        assert!(
+            verifying.verify(message, &first).is_ok(),
+            "the first does not verify"
+        );
+        assert!(
+            verifying.verify(message, &second).is_ok(),
+            "the second does not verify"
+        );
+
+        // And the randomness is real rather than a counter or a clock, which would
+        // collide on a fast machine. Sized so a repeating pattern is caught.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let signature = key.sign(message).expect("sign");
+            assert!(
+                seen.insert(signature.clone()),
+                "a signature repeated within 100 attempts, so the variation is not random"
+            );
+            assert!(
+                verifying.verify(message, &signature).is_ok(),
+                "a signature did not verify"
+            );
+        }
+    }
+
+    /// The Ed25519 half is still identical between two signatures, and this is
+    /// the reason the composite signature remains linkable.
+    ///
+    /// Hedging the ML-DSA half does not make the composite unlinkable, and it is
+    /// worth being exact about why. The composite is `mili-sig-v1`: the two
+    /// signatures concatenated, both carried verbatim. Ed25519 is deterministic by
+    /// construction (RFC 8032) and mili signs the same transcript every time, so
+    /// its 64 bytes repeat exactly. An observer holding two signatures from one
+    /// identity compares those 64 bytes and links them, with no effort and
+    /// without the verifying key.
+    ///
+    /// So the change buys what randomised ML-DSA signing is actually for, which
+    /// is fault-attack resistance against a deterministic signer, and it removes
+    /// the ML-DSA half from being a deterministic function of key and message. It
+    /// does not remove linkability. Recording that as a test rather than a
+    /// sentence is deliberate: if a future format change drops or replaces the
+    /// Ed25519 half, this test is what should fail, so the claim can be revisited
+    /// with evidence instead of memory.
+    #[test]
+    #[cfg(not(miri))]
+    fn the_ed25519_half_is_still_deterministic() {
+        let mut seed = [0x5Au8; SIGNING_KEY_SIZE];
+        seed[..32].copy_from_slice(&[0x21u8; 32]);
+        seed[32..].copy_from_slice(&[0xA3u8; 32]);
+        let key = SigningKey::from_bytes(seed);
+        let message = b"a message that is signed twice";
+
+        let first = key.sign(message).expect("sign");
+        let second = key.sign(message).expect("sign");
+
+        let ed25519_start = SIGNATURE_SIZE - ED25519_SIGNATURE_SIZE;
+        assert_eq!(
+            &first[ed25519_start..],
+            &second[ed25519_start..],
+            "the Ed25519 half became randomised, so the composite signature is no \
+             longer linkable and THREAT_MODEL section 3.6 needs rewriting rather \
+             than this assertion changing"
+        );
+    }
+
     #[test]
     #[cfg(not(miri))]
     fn every_truncation_is_rejected() {
@@ -989,12 +1107,20 @@ mod tests {
         // mili's own signature over the same key and message must also verify,
         // but is not byte identical to the published one. The reference
         // implementation that produced the draft's vectors used randomised ML-DSA
-        // signing, and mili uses the deterministic variant, so the two
-        // signatures differ while both being valid. See docs/SPEC.md section 6.4.
+        // signing, so those vectors pin verification and were never reproducible
+        // byte for byte by anyone, and mili randomises too. See docs/SPEC.md
+        // section 6.4.
+        //
+        // This assertion no longer carries much information: with both signers
+        // randomised, two signatures almost certainly differ whatever the
+        // implementations do. It is kept because it is the check that would catch
+        // a change which made signing deterministic, not because it can now
+        // prove one.
         let produced = signing.sign(message).expect("sign");
         assert_ne!(
             produced, file_bytes,
-            "mili produced the draft's exact signature, which would mean the              reference implementation was deterministic after all"
+            "mili produced the draft's exact signature, which would mean mili is \
+             signing deterministically"
         );
         verifying
             .verify(message, &produced)

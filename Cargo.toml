@@ -28,7 +28,16 @@ x-wing = { version = "=0.1.0", features = ["getrandom", "zeroize"] }
 # the allocator without being overwritten, which for a key file or a backup is a
 # `HKDF(Argon2id(password))` that outlives the file it decrypts.
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
-ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
+# `rand_core` for hedged ML-DSA signing, described where `signature.rs` uses it.
+# Already in the tree through the RustCrypto stack (`aead`, `digest` and so on) and
+# at the version `ml-dsa` requires, so this adds an edge rather than a crate and no
+# second version. `OsRng` is deliberately not used: `rng.rs` documents one source of
+# randomness with no way to supply another, and signing through a second source
+# would contradict that in the crate's most sensitive path.
+rand_core = "=0.10.1"
+# `rand_core` for hedged ML-DSA signing: FIPS 204's optional randomised variant,
+# which is what makes two signatures of one message unlinkable.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize", "rand_core"] }
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "zeroize"] }
 hybrid-array = "=0.4.15"
 # The default feature set is turned off, which drops `password-hash`, `rand` and

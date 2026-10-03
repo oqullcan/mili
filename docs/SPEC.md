@@ -306,32 +306,53 @@ algorithm rather than to a bare ML-DSA signature.
 Signatures cover a single in-memory buffer. There is no streaming signature in
 mili-v1.
 
-### 6.4 ML-DSA signing is deterministic
+### 6.4 ML-DSA signing is hedged
 
-`ml-dsa` 0.1.1 exposes only the deterministic variant of ML-DSA signing outside
-its `hazmat` feature: the randomness parameter is fixed at zero, so signing the
-same message with the same key always produces byte-identical output.
+The ML-DSA-65 half is signed with FIPS 204's randomised variant,
+`ExpandedSigningKey::sign_randomized`, drawing 32 bytes of randomness from the
+operating system through `rng.rs`. `ml-dsa` 0.1.1 exposes this behind its
+`rand_core` feature; there is no `hazmat` involvement, and the pinned version
+does expose it through the ordinary API.
 
-Consequences, both of which are real:
+The randomness comes from `rng.rs`, which is mili's only randomness source: it
+fails closed with `Error::Failed`, it has no caller-supplied generator, seed or
+deterministic mode, and no public API can make a signature predictable. FIPS 204
+provides no signature that needs no randomness, so failing closed is the only
+option that is not a forgery risk.
 
-- Two signatures by the same key over the same message are identical. An
-  observer holding a verifying key can therefore link them. This is the same
-  linkability an observer gets from deterministic encryption, and mili does not
-  claim to prevent it.
-- There is no hedged randomisation, so the extra fault-attack resistance that
-  randomised ML-DSA signing provides is not available.
+What this buys:
 
-FIPS 204 approves the deterministic algorithm, and the composite draft does not
-require randomised signing, so the construction is conformant. It is recorded in
-`THREAT_MODEL.md` as a partial mitigation rather than a solved problem. Making
-mili's signatures randomised would need the `hazmat` feature of `ml-dsa` and a
-signing path that is not exposed without it.
+- The ML-DSA half is no longer a deterministic function of the key and the
+  message, so the fault attacks that target a deterministic signer do not apply.
+- Two ML-DSA signatures over the same message with the same key differ.
+
+What this does not buy, stated plainly because the obvious next inference is
+wrong: **the composite signature is still linkable.** `mili-sig-v1` carries the
+Ed25519 half verbatim, Ed25519 is deterministic by construction (RFC 8032), and
+mili signs the same transcript every time, so those 64 bytes repeat exactly
+between two signatures over the same message. An observer links them by
+comparing 64 bytes, without the verifying key and without effort. Hedging the
+ML-DSA half does not change this. The residual is recorded in
+`THREAT_MODEL.md` section 3.6 and pinned by the test
+`the_ed25519_half_is_still_deterministic`, so that a future format change which
+did remove it would have to update both.
+
+Removing it would mean changing the composite construction: dropping the Ed25519
+half, or replacing it with a scheme that has a randomised variant. Neither is
+possible within `mili-sig-v1`, and `mili-sig-v1` is unchanged by this section.
+The encoding is still [`SIGNATURE_SIZE`] bytes, verification is unchanged, and
+the randomness travels inside the ML-DSA signature where FIPS 204 puts it.
+
+FIPS 204 approves both the deterministic and the randomised algorithms, and the
+composite draft does not require randomised signing, so hedged signing is
+conformant either way.
 
 One consequence for testing: the draft's Appendix E vectors pin *verification*,
 not signature bytes. The reference implementation that produced them used
-randomised ML-DSA signing, so mili's signature over the draft's key and message
-verifies under the draft's public key but is not byte identical to the published
-one. The test asserts both facts.
+randomised ML-DSA signing, so those vectors were never reproducible byte for byte
+by anyone, mili included. The test asserts that the published signature verifies
+under mili's construction and that mili's own signature verifies, not that the
+two are equal.
 
 ## 7. Password-wrapped key file (`format_type = 0x10`)
 

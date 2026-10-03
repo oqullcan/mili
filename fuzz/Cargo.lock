@@ -362,6 +362,7 @@ dependencies = [
  "hkdf",
  "hybrid-array",
  "ml-dsa",
+ "rand_core",
  "sha2",
  "subtle",
  "x-wing",
@@ -598,6 +599,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
  "digest",
+ "rand_core",
 ]
 
 [[package]]

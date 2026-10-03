@@ -890,12 +890,17 @@ who = "mili maintainers"
 criteria = "safe-to-deploy"
 version = "0.1.1"
 notes = """
+Features enabled by the workspace: `alloc`, `zeroize`, `rand_core`. The last one
+was added with hedged signing and is reviewed above.
+
 3735 lines, no unsafe at all, no build script, no ambient capabilities. This is the
 ML-DSA-65 half of mili's composite signature and one of the two primitives the
 whole library is named for.
 
-Signing was checked for determinism, because `THREAT_MODEL.md` section 3.6 makes a
-claim about it:
+Both signing variants were read, because which one mili calls is the substance of
+`THREAT_MODEL.md` section 3.6 and `SPEC.md` section 6.4.
+
+The deterministic one takes no RNG:
 
     pub fn sign_deterministic(&self, M: &[u8], ctx: &[u8]) -> Result<Signature<P>, Error> {
         self.raw_sign_deterministic(&[M], ctx)
@@ -905,10 +910,40 @@ claim about it:
         self.raw_sign_mu(mu, &rnd)
     }
 
-The randomness `rnd` is a zeroed B32 and there is no RNG parameter anywhere on
-this path, so the same key and message produce the same signature. That is FIPS
-204's optional deterministic variant, and mili's claim that a signature carries no
-second nonce rests on this function rather than on a comment.
+so `rnd` is a zeroed B32 and the same key and message give the same bytes. An
+earlier revision of this note used this function to support a claim that mili
+signed deterministically, which was true and which mili no longer does; the claim
+was about a property of an upstream default rather than of mili.
+
+mili calls the randomised one, which is gated on the `rand_core` feature rather
+than on `hazmat`:
+
+    #[cfg(feature = "rand_core")]
+    pub fn sign_randomized<R: TryCryptoRng + ?Sized>(
+        &self, M: &[u8], ctx: &[u8], rng: &mut R,
+    ) -> Result<Signature<P>, Error> {
+        self.raw_sign_randomized(&[M], ctx, rng)
+    }
+
+`raw_sign_randomized` checks the context length, draws 32 bytes through
+`rng.try_fill_bytes` and returns `Error::new()` if that fails, then runs the same
+rejection loop as the deterministic path. The bounds worth checking were whether
+the loop can panic and whether the entropy failure is distinguishable:
+
+- `try_fill_bytes` failing becomes an opaque `Error::new()`, the same value the
+  over-long context produces. mili cannot tell those apart either, and reports
+  both as `Error::Failed`, which is also what `rng.rs` returns. A caller learns
+  that signing failed and nothing about why, so no oracle is created by the
+  collapse.
+- The rejection loop is bounded, not unbounded: it re-samples while the signature
+  is too large, and the `unreachable!()` after it is not reachable because the
+  loop only exits on a signature that fits. This is upstream's claim, not mili's;
+  mili asserts the observable consequence instead, in
+  `two_signatures_of_the_same_message_differ_and_both_verify`.
+
+The trait bound is `TryCryptoRng`, not `CryptoRng`, which is why mili can adapt
+`rng.rs` without a panic path: the fallible trait is the one the randomised
+variant asks for.
 
 Verification was checked for early exit, since an early exit on a malformed
 signature would be a timing signal:
@@ -1179,24 +1214,52 @@ notes = """
 `SPEC.md` section 9 depends on for its claim about entropy, and it is a trait
 definition plus the seeding helpers.
 
-No unsafe and no entropy source: `CryptoRng` and `RngCore` are marker traits, and
-`impl RngCore for CryptoRng` is empty, so a type can be a `CryptoRng` only by
-naming that trait itself. The concrete sources in this tree are `getrandom`, audited
-separately, and `ChaCha20Rng` from `rand_chacha`, which is a deterministic stream
-cipher seeded from bytes and is not used for production entropy in mili.
+No unsafe and no entropy source. `TryCryptoRng` and `CryptoRng` are marker traits
+with no methods, and a type becomes one only by naming it, so claiming either is
+a claim about provenance that has to be made deliberately. The concrete sources in
+this tree are `getrandom`, audited separately, and `ChaCha20Rng` from `rand_chacha`,
+which is a deterministic stream cipher seeded from bytes and is not used for
+production entropy in mili.
 
-`seed_from_rng` propagates a seed error rather than panicking, and
-`TryRngCore::try_fill_bytes` is the fallible form, so a caller that wants to handle
-entropy failure can and one that does not will panic loudly rather than continue
-with an unseeded generator. mili never constructs an RNG in production at all: it
-reads seed bytes from the keyfile or the XOF, so this crate is a type boundary in
-the tree rather than a component mili runs.
+This is now a direct workspace dependency rather than only a transitive one, for
+hedged ML-DSA signing. The change is that `rng.rs` implements `TryRng` and
+`TryCryptoRng` for a unit struct that forwards `try_fill_bytes` to `rng::fill`.
+Three things were checked about that, because this is the crate's most sensitive
+boundary now:
+
+- `TryRng` is implemented, not `CryptoRng`. `TryRng::Error` is an associated type
+  bounded by `core::error::Error`, and mili's `Error` already implements it, so
+  an entropy failure propagates as a value. Implementing `CryptoRng` instead would
+  have required `fill_bytes`, whose contract is infallible and whose only honest
+  failure behaviour is a panic; `THREAT_MODEL.md` says mili has no reachable
+  panic, so that was not available.
+- `TryRngCore` in 0.10.1 is a stub with a single associated type and a blanket
+  implementation over `TryRng`, so implementing it directly would be redundant.
+  Only `TryRng` and the `TryCryptoRng` marker are implemented.
+- `TryCryptoRng` has no blanket implementation over `TryRng` in 0.10.1, only over
+  `DerefMut`, so a concrete type has to claim it explicitly. `signature.rs` passes
+  the value to `ml-dsa`, which is what makes the claim load-bearing rather than
+  decorative.
+
+`seed_from_rng` propagates a seed error rather than panicking. mili constructs no
+RNG object in production; it reads seed bytes from the keyfile or the XOF, or asks
+`getrandom` for bytes.
 
 The one thing worth recording is that 0.10.1 and 0.9.5 are both in the lockfile.
 `crypto-common` and everything above it in the RustCrypto chain are on 0.10.1;
-`proptest` and its `rand` are on 0.9.5 and are dev dependencies. `SPEC.md` section
+`proptest` and its `rand` are on 0.9.5 and are dev dependencies. The direct
+dependency pins 0.10.1, which is the version `ml-dsa` requires through
+`crypto-common`, so the edge mili signs through and the edge the rest of the
+RustCrypto stack uses are the same trait and the same version. A pin of 0.9.5 here
+would compile as a direct dependency and then fail to satisfy `ml-dsa`'s bound,
+which is a confusing error for a version that looks plausible. `SPEC.md` section
 9's entropy claim is about the production path, which is 0.10.1, and the 0.9.5
 side never runs in a deployed binary.
+
+`OsRng` is available behind this crate but is deliberately unused. `rng.rs`
+documents one randomness source for the whole library with no way to supply
+another; signing through a second source would contradict that in the operation
+where it would matter most.
 
 Dependencies are `getrandom` optionally, for the `OsRng` helper.
 """

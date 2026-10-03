@@ -74,8 +74,9 @@ func GenerateSealingKey() (SealingKey, error) {
 // there is no "give me 64 random bytes" call on this boundary: a caller that wanted
 // that would use crypto/rand directly, and it would not be a mili key.
 //
-// mili signs deterministically, so a signature does not carry a second nonce. See
-// docs/THREAT_MODEL.md section 3.6 for what that does and does not mean.
+// A signature does not carry a caller-supplied nonce; the ML-DSA half is signed
+// hedged with randomness mili draws itself. See docs/THREAT_MODEL.md section 3.6 for
+// what that does and, at more length, does not mean.
 func GenerateSigningKey() (SigningKey, error) {
 	out := make([]byte, SigningKeySize)
 	var written C.size_t

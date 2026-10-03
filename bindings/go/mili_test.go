@@ -298,9 +298,16 @@ func TestSignAndVerify(t *testing.T) {
 	}
 }
 
-// TestSignIsDeterministic is what docs/THREAT_MODEL.md section 3.6 records: ml-dsa 0.1.1
-// signs deterministically, so there is no second nonce to leak.
-func TestSignIsDeterministic(t *testing.T) {
+// TestTwoSignaturesDiffer is what docs/THREAT_MODEL.md section 3.6 records: the ML-DSA
+// half is signed hedged, so the same key and message produce different bytes. This
+// used to assert the opposite and to call it a nonce that cannot leak, which was a
+// claim about an upstream default rather than about mili.
+//
+// The Ed25519 half is still deterministic, so the composite is still linkable; the
+// binding test for that residual lives in mili-core as
+// the_ed25519_half_is_still_deterministic, because the halves can only be told apart
+// by offset.
+func TestTwoSignaturesDiffer(t *testing.T) {
 	seed := mustSigningKey(t)
 	first, err := Sign(seed, []byte("a message"))
 	if err != nil {
@@ -310,8 +317,29 @@ func TestSignIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if !bytes.Equal(first, second) {
-		t.Error("two signatures of one message and key differ")
+	if bytes.Equal(first, second) {
+		t.Error("two signatures of one message and key are identical, so the ML-DSA " +
+			"half is being signed deterministically")
+	}
+}
+
+// TestSignatureVerifies checks that the randomised signature is still a valid one.
+// Differing bytes are only useful if they verify, and a hedged signature that no
+// longer verified would be a silent loss of function rather than a privacy gain.
+func TestSignatureVerifies(t *testing.T) {
+	seed := mustSigningKey(t)
+	verifying, err := VerifyingKey(seed)
+	if err != nil {
+		t.Fatalf("VerifyingKey: %v", err)
+	}
+	for i := 0; i < 16; i++ {
+		signature, err := Sign(seed, []byte("a message"))
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		if err := Verify(verifying, []byte("a message"), signature); err != nil {
+			t.Fatalf("Verify on attempt %d: %v", i, err)
+		}
 	}
 }
 

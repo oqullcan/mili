@@ -90,9 +90,9 @@ direction would be picking a winner without evidence, so they are excluded.
 `supply-chain/audits.toml` records the observation under `ml-dsa`.
 
 mili has no exposure to that disagreement: it never passes an empty context.
-`LABEL` is thirty bytes, and `SigningKey::sign_deterministic` takes the same label,
-so mili cannot produce a signature that the ambiguous path would accept and
-`verify_with_context` would reject.
+`LABEL` is thirty bytes, and both `sign_deterministic` and `sign_randomized` take
+that same label, so mili cannot produce a signature that the ambiguous path would
+accept and `verify_with_context` would reject.
 
 Signing is not covered because the ACVP sigGen groups give an expanded secret key
 rather than a seed, and `ml-dsa` 0.1.1 reaches an expanded key only through

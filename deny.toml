@@ -97,7 +97,12 @@ allow = ["alloc", "zeroize"]
 [[bans.features]]
 crate = "ml-dsa@0.1.1"
 exact = true
-allow = ["alloc", "zeroize"]
+# `rand_core` selects FIPS 204's randomised signing, which is what mili calls.
+# It is the feature that exposes `sign_randomized`; without it mili could only
+# sign deterministically, which is what `THREAT_MODEL.md` section 3.6 used to
+# describe. It pulls in `rand_core` itself, not an entropy source: the trait is
+# the boundary and `rng.rs` supplies the bytes.
+allow = ["alloc", "zeroize", "rand_core"]
 
 # mili turns the default feature set off and asks for `alloc` and `zeroize`.
 # `fast` selects the SIMD backends of curve25519-dalek; the portable path is not

@@ -379,6 +379,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "proptest",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "sha2",
@@ -739,6 +740,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
  "digest",
+ "rand_core 0.10.1",
 ]
 
 [[package]]

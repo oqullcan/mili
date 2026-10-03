@@ -272,19 +272,29 @@ reduce the composite to ML-DSA-65 alone without ever failing a verification.
 Verification uses `verify_strict` rather than `verify` as a second layer.
 Partially mitigated by construction.
 
-### 3.6 Signature determinism
+### 3.6 Signature linkability through the Ed25519 half
 
-ML-DSA signing in mili is deterministic, so two signatures by the same key over
-the same message are byte identical. An observer who holds a verifying key can
-link them. This is not prevented and not claimed to be prevented. The Ed25519
-half is also deterministic, as Ed25519 is by construction, so the composite
-signature is deterministic throughout.
+The ML-DSA-65 half is signed hedged with 32 bytes from the operating system, so
+it is no longer a deterministic function of the key and the message. That removes
+the deterministic-signer fault-attack surface. It does not remove linkability of
+the composite signature.
 
-Making the ML-DSA half randomised requires the `hazmat` feature of `ml-dsa`,
-which the pinned version does not expose through its ordinary API. FIPS 204
-approves the deterministic algorithm and the composite draft does not require
-randomised signing, so the construction is conformant. Partially mitigated: the
-linkability is documented rather than removed.
+`mili-sig-v1` is the two signatures concatenated, both carried verbatim. Ed25519
+is deterministic by construction and mili signs the same transcript every time,
+so the Ed25519 half of two signatures over the same message is byte identical. An
+observer holding two signatures from one identity compares 64 bytes and links
+them, with no effort and without the verifying key. This is a property of Ed25519
+and of the composite construction, not a defect in how mili calls it.
+
+Removing it would require changing the construction: dropping the Ed25519 half,
+or replacing it with a scheme that offers a randomised signature. That is a
+different format, not a mili configuration, and it would forfeit the property that
+makes the composite worth carrying: an attacker must break both algorithms rather
+than the weaker one. Not mitigated, and not claimed to be.
+
+The residual is asserted by the test `the_ed25519_half_is_still_deterministic`, so
+that a change which did remove it has to update this section rather than quietly
+invalidate it.
 
 ### 3.7 Replay of a whole file
 

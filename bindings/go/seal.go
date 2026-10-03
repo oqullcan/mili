@@ -146,7 +146,9 @@ func OpenStream(stream []byte, maximumPlaintext int, keys ...SealingKey) ([]byte
 // 6 requires: one component alone is not a mili signature and this library will not
 // accept one.
 //
-// Signing is deterministic. The same key and message give the same bytes every time.
+// Signing is randomised on the ML-DSA half, so the same key and message give
+// different bytes every time. The signature is still the same length and verifies the
+// same way; see docs/THREAT_MODEL.md section 3.6.
 func Sign(seed SigningKey, message []byte) ([]byte, error) {
 	if len(seed) != SigningKeySize {
 		return nil, fmt.Errorf("mili: a signing key is %d bytes, got %d", SigningKeySize, len(seed))

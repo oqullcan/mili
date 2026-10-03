@@ -41,6 +41,50 @@ pub(crate) fn array<const N: usize>() -> Result<[u8; N], Error> {
     Ok(bytes)
 }
 
+/// Adapts this module to [`rand_core`]'s interface, for the one dependency that
+/// takes an RNG as a parameter rather than being handed a buffer.
+///
+/// The point of this type is that it does not add a second source of randomness.
+/// A `CryptoRng` from `rand_core` would work just as well mechanically, and
+/// `OsRng` is the obvious choice, but this module's contract is that every random
+/// value in mili comes from [`getrandom`], fails closed, and leaves no way for a
+/// caller to substitute a generator. Signing is the operation where that matters
+/// most, so it is the last place to quietly acquire a second one.
+///
+/// The trait is fallible rather than the ordinary [`rand_core::RngCore`] so that
+/// an unavailable operating system source becomes an error. FIPS 204's randomised
+/// signing accepts a fallible RNG for exactly this reason: it has no way to
+/// produce a signature without randomness, and a signature that silently used a
+/// weak or repeated value would be a forgery risk, not a degradation.
+pub(crate) struct TryRng;
+
+impl rand_core::TryRng for TryRng {
+    type Error = Error;
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        fill(destination)
+    }
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        let mut bytes = [0u8; 4];
+        fill(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let mut bytes = [0u8; 8];
+        fill(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+}
+
+// `TryCryptoRng` is a marker with no methods and no blanket implementation, so
+// claiming it is a separate, deliberate line. `CryptoRng`, the infallible trait,
+// is deliberately not implemented: that is what would let a caller depend on
+// signing never failing, and here it can fail, because there is no signature
+// without randomness.
+impl rand_core::TryCryptoRng for TryRng {}
+
 #[cfg(test)]
 mod tests {
     use super::{array, fill};
