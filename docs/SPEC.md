@@ -716,11 +716,12 @@ schedule.
 | Source | Used for | Cases | Phase |
 |--------|----------|-------|-------|
 | RFC 5869 test cases 1 and 3 | HKDF-SHA256 primitive usage | 2 | 1 |
-| Frozen mili-v1 domain separation vectors, generated with an independent implementation | `Domain` label binding | 7 | 1 |
+| Frozen mili-v1 domain separation vectors, generated with an independent implementation | `Domain` label binding | 5, one per variant of a closed set of five | 1 |
 | RFC 8439 Section 2.8.2 | ChaCha20-Poly1305 | 1 | 2 |
 | C2SP Wycheproof `chacha20_poly1305_test.json` | ChaCha20-Poly1305 edge and negative cases | 316, of which 256 accepted and 60 rejected | 2 |
 | `draft-connolly-cfrg-xwing-kem-11` Appendix C | X-Wing keygen, encapsulation and decapsulation | 3 | 2 |
 | NIST ACVP vectors for ML-KEM-768 | ML-KEM encapsulation, against NIST's own vectors | 25 | 6 |
+| NIST ACVP vectors for ML-DSA-65 verification | the context-aware verification path, against NIST's own vectors | 11, of which 3 accepted and 8 refused | 6 |
 | `draft-ietf-lamps-pq-composite-sigs-19` Appendix E | the whole composite signature construction, both components, empty and non empty context | 1 | 3 |
 | RFC 9106 test vectors | Argon2id | - | 5 |
 | proptest properties and exhaustive byte sweeps | mili formats | - | 2 to 5 |
@@ -729,6 +730,14 @@ schedule.
 The Argon2id row is "-" because the RFC's own vectors turned out to be
 unreachable through the API mili calls; `../tests/vectors/README.md` records why and
 what is pinned in their place.
+
+The ML-DSA-65 row counts only what the test can assert honestly. ACVP publishes
+empty-context vectors as well and they are not in the file, because
+`ml-dsa`'s two verification entry points disagree about them and the corpus does
+not settle which is right. `../tests/vectors/README.md` sets that out and
+`../supply-chain/audits.toml` records it under `ml-dsa`. mili is not exposed either
+way: the composite draft binds the ML-DSA half to the construction through a thirty
+byte context string, and `LABEL` is thirty bytes.
 
 Where a Wycheproof or ACVP file has no Rust-side runner, the vectors are
 converted once into the JSON layout under `tests/vectors/` and the runner is

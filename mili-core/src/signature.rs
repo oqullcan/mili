@@ -470,6 +470,13 @@ mod tests {
     #[cfg(not(miri))]
     use crate::{Error, SealingKey};
     #[cfg(not(miri))]
+    use hybrid_array::Array;
+    #[cfg(not(miri))]
+    use ml_dsa::{
+        EncodedVerifyingKey, KeyInit as _, MlDsa65, Signature as MlDsaSignature,
+        VerifyingKey as MlDsaVerifyingKey,
+    };
+    #[cfg(not(miri))]
     use serde::Deserialize;
 
     #[cfg(not(miri))]
@@ -1015,5 +1022,227 @@ mod tests {
             verifying.verify(file.message.as_bytes(), &bytes),
             Err(Error::Failed)
         ));
+    }
+
+    // The NIST ACVP corpus for ML-DSA-65 verification.
+    //
+    // This is the only known-answer coverage the ML-DSA half has, and its scope is
+    // narrower than the file name suggests, so the scope is stated before the code.
+    //
+    // It covers the context-aware verification path: three published signatures
+    // that must verify, and eight that must not. A verifier test that only checks
+    // what it must accept cannot show that it refuses anything, so the negatives
+    // are most of the file.
+    //
+    // The corpus is context-bearing on purpose, because that is the path mili takes.
+    // The composite draft binds the ML-DSA half to the construction by passing the
+    // algorithm label as ML-DSA's context string, so `VerifyingKey::verify` here
+    // calls `verify_with_context` with a thirty byte label. Empty-context vectors
+    // would not touch that call.
+    //
+    // It does not cover signing. The ACVP sigGen groups give an expanded secret key
+    // rather than a seed, and `ml-dsa` 0.1.1 reaches an expanded key only through
+    // `ExpandedSigningKey::from_expanded`, which the crate deprecates and
+    // documents as a panic risk. `mili-core` is `#![forbid(unsafe_code)]` and its
+    // threat model has no panic on a library path, so consuming those vectors
+    // would mean using the one entry point upstream tells callers not to. mili's
+    // signing output is pinned by the composite draft's Appendix E vector, which is
+    // a verification test as well: it carries the draft's key and message and
+    // checks that mili's signature verifies under them.
+    //
+    // The vector file records one further thing this test does not assert, because
+    // it cannot be asserted honestly: ACVP's empty-context positive cases are
+    // accepted by `verify_internal` and rejected by `verify_with_context`, and the
+    // crate documents `verify_internal` as omitting the domain separator and the
+    // context boundary, so the two disagree and the file does not say which is
+    // right. mili never passes an empty context, so it has no exposure either way.
+    #[cfg(not(miri))]
+    const ACVP_SIGVER_JSON: &str = include_str!("../../tests/vectors/acvp_mldsa65_sigver.json");
+
+    #[cfg(not(miri))]
+    #[derive(serde::Deserialize)]
+    struct AcvpSigVerFile {
+        standard: String,
+        vector_set: u32,
+        groups: Vec<AcvpSigVerGroup>,
+    }
+
+    #[cfg(not(miri))]
+    #[derive(serde::Deserialize)]
+    struct AcvpSigVerGroup {
+        parameter_set: String,
+        function: String,
+        pre_hash: String,
+        context: String,
+        cases: Vec<AcvpSigVerCase>,
+    }
+
+    #[cfg(not(miri))]
+    #[derive(serde::Deserialize)]
+    struct AcvpSigVerCase {
+        tc_id: u32,
+        pk: String,
+        message: String,
+        signature: String,
+        must_verify: bool,
+        #[serde(default)]
+        context: Option<String>,
+    }
+
+    /// ML-DSA-65 verification agrees with the NIST ACVP corpus.
+    #[test]
+    #[cfg(not(miri))]
+    fn ml_dsa65_verification_matches_the_nist_acvp_corpus() {
+        let file: AcvpSigVerFile =
+            serde_json::from_str(ACVP_SIGVER_JSON).expect("the acvp sigver file parses");
+        assert_eq!(file.standard, "FIPS 204");
+        assert_eq!(file.vector_set, 42, "the pinned ACVP vector set");
+        assert!(!file.groups.is_empty(), "the acvp sigver file is empty");
+
+        let mut accepted = 0usize;
+        let mut refused_at_decode = 0usize;
+        let mut refused_at_verify = 0usize;
+        let mut saw_context_free_group = false;
+        let mut saw_context_bound_group = false;
+
+        for group in &file.groups {
+            assert_eq!(group.parameter_set, "ML-DSA-65", "mili signs with only 65");
+            assert_eq!(group.function, "verification");
+            assert_eq!(
+                group.pre_hash, "pure",
+                "mili does not pre-hash before signing"
+            );
+            assert!(
+                matches!(group.context.as_str(), "empty" | "present"),
+                "unexpected context kind {}",
+                group.context
+            );
+
+            for case in &group.cases {
+                let label = format!("tc_id {}", case.tc_id);
+
+                let pk = hex_decode(&case.pk);
+                assert_eq!(
+                    pk.len(),
+                    ML_DSA65_VERIFYING_KEY_SIZE,
+                    "{label}: the published key is not an ML-DSA-65 key"
+                );
+                let signature = hex_decode(&case.signature);
+                assert_eq!(
+                    signature.len(),
+                    ML_DSA65_SIGNATURE_SIZE,
+                    "{label}: the published signature is not an ML-DSA-65 signature"
+                );
+                let message = hex_decode(&case.message);
+                let context = case.context.as_deref().map(hex_decode).unwrap_or_default();
+
+                match group.context.as_str() {
+                    "empty" => {
+                        assert!(context.is_empty(), "{label}: the group says no context");
+                        saw_context_free_group = true;
+                    }
+                    "present" => {
+                        assert!(!context.is_empty(), "{label}: the group says a context");
+                        assert!(
+                            context.len() <= 255,
+                            "{label}: FIPS 204 caps the context at 255 bytes"
+                        );
+                        saw_context_bound_group = true;
+                    }
+                    _ => unreachable!("checked above"),
+                }
+
+                // Built exactly the way `VerifyingKey::try_from` builds the ML-DSA
+                // half of a composite key, so this exercises the construction mili
+                // depends on rather than a parallel one. Every ACVP case carries a
+                // well formed key — the tampering is in the signature, the message
+                // or the context — so a decode failure here means mili or the crate
+                // disagrees with NIST about what a key is.
+                let encoded_key = EncodedVerifyingKey::<MlDsa65>::try_from(pk.as_slice())
+                    .unwrap_or_else(|_| panic!("{label}: the published key did not decode"));
+                let verifying = MlDsaVerifyingKey::<MlDsa65>::new(&encoded_key);
+
+                let decoded = MlDsaSignature::<MlDsa65>::decode(&Array::from(
+                    <[u8; ML_DSA65_SIGNATURE_SIZE]>::try_from(signature.as_slice())
+                        .expect("the length is checked above"),
+                ));
+
+                if case.must_verify {
+                    let mldsa_signature = decoded.unwrap_or_else(|| {
+                        panic!("{label}: ACVP says this verifies and it did not decode")
+                    });
+                    assert!(
+                        verifying.verify_with_context(&message, &context, &mldsa_signature),
+                        "{label}: ACVP says this verifies and it did not, with the \
+                         published context of {} bytes",
+                        context.len()
+                    );
+
+                    // A signature made with a context does not verify without it. This
+                    // is the property that makes the context a domain separator rather
+                    // than decoration, and it is the failure a caller that dropped the
+                    // context from its own call would silently inherit. Asserted, not
+                    // assumed, because it is what distinguishes the specified algorithm
+                    // from `verify_internal`.
+                    if !context.is_empty() {
+                        assert!(
+                            !verifying.verify_with_context(&message, &[], &mldsa_signature),
+                            "{label}: a signature made with a non-empty context verified \
+                             without it"
+                        );
+                    }
+                    accepted += 1;
+                    continue;
+                }
+
+                // ACVP's negatives are not all "well formed but wrong". Several are
+                // corrupted in the encoding, and `Signature::decode` catches those:
+                // FIPS 204 fixes which bytes of a signature must be zero, and a
+                // signature with a non-zero byte there is not a signature. Both are
+                // correct refusals and the test should not insist on which one
+                // happens, only that the case does not verify.
+                match decoded {
+                    None => refused_at_decode += 1,
+                    Some(mldsa_signature) => {
+                        assert!(
+                            !verifying.verify_with_context(&message, &context, &mldsa_signature),
+                            "{label}: ACVP says this must not verify and it did"
+                        );
+                        refused_at_verify += 1;
+                    }
+                }
+            }
+        }
+
+        // Both group shapes present. The context-free one is here only for its
+        // negatives, but it is what proves the corpus is not entirely context-bound,
+        // which is the property that would let a change to the context-free path go
+        // unnoticed.
+        assert!(saw_context_bound_group, "no case exercised a context");
+        assert!(
+            saw_context_free_group,
+            "no case exercised the context-free path"
+        );
+
+        assert_eq!(
+            accepted, 3,
+            "the corpus is meant to hold three positive cases"
+        );
+        assert!(
+            refused_at_decode + refused_at_verify == 8,
+            "every one of the eight negative cases was refused, at decode or at verify"
+        );
+        // Both refusal routes present, because the two are different code paths and
+        // a corpus that only reached one of them would not show that the other works.
+        assert!(
+            refused_at_decode > 0,
+            "no negative case was refused at decode, so the corrupt-encoding check \
+             these vectors exercise is not being tested"
+        );
+        assert!(
+            refused_at_verify > 0,
+            "no negative case reached verification, so a verifier that wrongly \
+             accepts would not be caught by this file"
+        );
     }
 }

@@ -925,7 +925,47 @@ undercut by the primitive underneath it.
 
 The one branch that does exist is `if ctx.len() > 255 { return false }`, which
 depends on the caller's context length and not on the signature, and which exists
-because FIPS 204 requires it. mili passes an empty context, so it is not reached.
+because FIPS 204 requires it. mili passes a thirty byte context, the composite
+algorithm label, so it is not reached. An earlier revision of this note said mili
+passed an empty context, which was wrong and was found by
+`ml_dsa65_verification_matches_the_nist_acvp_corpus`: the test asserts that a
+published signature made with a context does not verify without it, which it could
+not have done if mili never used a context at all.
+
+`verify_internal` was checked for the same reason and found not to be FIPS 204.
+There are two ways to build the value the verifier compares against:
+
+    // MuBuilder::new
+    let mut h = H::default();
+    h = h.absorb(tr);
+    h = h.absorb(&[0]);
+    h = h.absorb(&[Truncate::truncate(ctx.len())]);
+    h = h.absorb(ctx);
+
+    // MuBuilder::internal
+    let mut h = H::default().absorb(tr);
+    for m in Mp { h = h.absorb(m); }
+
+FIPS 204 algorithm 3 defines the second as the first with an empty context, that
+is `tr || 0x00 || 0x00 || M`. `MuBuilder::internal` omits both bytes and the crate
+says so in its own documentation: "It does not include the domain separator that
+distinguishes between the normal and pre-hashed cases, and it does not separate
+the context string from the rest of the message." So `verify_internal` is not
+algorithm 3 and a signature it accepts is not a signature `verify_with_context`
+accepts.
+
+The NIST corpus disagrees about which reading is right, and that is recorded
+rather than resolved. ACVP vector set 42, group 10, holds three ML-DSA-65
+signatures with an empty context that ACVP says must verify;
+`verify_with_context` with an empty context rejects all three and `verify_internal`
+accepts all three. Either the corpus and FIPS 204 disagree, or the crate's
+`MuBuilder::internal` is what a conforming implementation computes and
+`MuBuilder::new` is the one with the extra bytes. mili has no exposure either way,
+because it never passes an empty context: `LABEL` is thirty bytes and every call
+goes through `verify_with_context`. A caller reaching for `verify_internal` would
+get a verifier that disagrees with the crate's own specified path, which is worth
+knowing and is the reason the three cases are excluded from
+`tests/vectors/acvp_mldsa65_sigver.json` rather than asserted in either direction.
 
 The composite construction in `mili-core` adds the second component and the
 context binding, and is checked there rather than here: mili verifies both

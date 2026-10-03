@@ -329,7 +329,7 @@ are the tests that call Argon2id, one exhaustive Wycheproof sweep is ignored
 there, and the sealed box byte sweep is reduced to one position per region because
 each authenticated operation costs about ten seconds when interpreted.
 
-The exclusions are not loose. Roughly 142 of the 217 library tests are gated, and
+The exclusions are not loose. Roughly 142 of the 218 library tests are gated, and
 an attempt to widen the gate was made and abandoned: the stream module looks like
 the obvious candidate because it is ChaCha20-Poly1305 and HKDF with no KEM, but
 its tests go through `seal_buffered`, which decapsulates, which is X-Wing, which

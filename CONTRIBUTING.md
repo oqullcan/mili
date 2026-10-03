@@ -86,7 +86,7 @@ length nothing checks there.
 
 ## Miri coverage is narrow on purpose
 
-Roughly 142 of the 217 library tests are `#[cfg(not(miri))]`, and that is not an
+Roughly 142 of the 218 library tests are `#[cfg(not(miri))]`, and that is not an
 oversight to be tidied. A test that decapsulates goes through X-Wing, which is
 ML-KEM-768 and X25519, and interpreting either of those is not something a six
 minute job should do. The stream module looks like the exception because it is
