@@ -186,8 +186,9 @@ impl SigningKey {
     /// Signs `message` and returns the `mili-sig-v1` encoding.
     ///
     /// The ML-DSA half is signed hedged: FIPS 204's randomised variant, with 32
-    /// bytes from [`crate::rng`], which is the only randomness source mili has and
-    /// which offers no caller-supplied alternative. The ML-DSA signature is
+    /// bytes from the operating system, which is the only randomness source mili has
+    /// and which offers no caller-supplied alternative. `rng.rs` is where that
+    /// lives; it is private, so this cannot be a link. The ML-DSA signature is
     /// therefore not a function of the key and the message alone, and no fault
     /// attack that a deterministic signer is exposed to applies here.
     ///
